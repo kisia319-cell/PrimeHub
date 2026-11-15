@@ -29,6 +29,8 @@ jobs:
           name: PrimeHub v1.0.0
           target_commitish: main
           generate_release_notes: true
+          draft: false
+          prerelease: false
           files: dist/PrimeHub.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
