@@ -1,5 +1,3 @@
-[Reading 320 lines from start (total: 320 lines, 0 remaining)]
-
 import os, sys, json, time, shutil, threading, urllib.request, urllib.error, zipfile, subprocess
 from pathlib import Path
 import tkinter as tk
