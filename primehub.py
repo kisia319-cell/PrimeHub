@@ -1,0 +1,322 @@
+[Reading 320 lines from start (total: 320 lines, 0 remaining)]
+
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, zipfile, subprocess
+from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+APP_NAME = "PrimeHub"
+ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
+GAMES = ROOT / "Games"
+DATA = ROOT / "hub-state.json"
+API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
+API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/PrimeLauncher-Mobile/releases/latest"
+API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
+HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
+
+COLORS = {"bg":"#0b1020","panel":"#121a2d","panel2":"#18243b","line":"#263650","text":"#eef4ff","muted":"#91a3bf","blue":"#4d8dff","cyan":"#55d5e8","green":"#54d69a","orange":"#ffbd66"}
+
+class PrimeHub:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("PrimeHub")
+        self.root.geometry("1120x740")
+        self.root.minsize(900, 620)
+        self.root.configure(bg=COLORS["bg"])
+        self.platform = "PC"
+        self.releases = {}
+        self.busy = False
+        self.state = self.load_state()
+        self.build_ui()
+        self.refresh_cards()
+        self.root.after(700, self.check_updates_async)
+
+    def load_state(self):
+        try: return json.loads(DATA.read_text("utf-8"))
+        except: return {}
+
+    def save_state(self):
+        ROOT.mkdir(parents=True, exist_ok=True)
+        DATA.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), "utf-8")
+
+    def build_ui(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Hub.Horizontal.TProgressbar", troughcolor=COLORS["panel2"], background=COLORS["blue"], bordercolor=COLORS["panel2"], lightcolor=COLORS["blue"], darkcolor=COLORS["blue"])
+        header = tk.Frame(self.root, bg=COLORS["bg"])
+        header.pack(fill="x", padx=34, pady=(25,12))
+        brand = tk.Frame(header, bg=COLORS["bg"])
+        brand.pack(side="left")
+        tk.Label(brand, text="PRIME", font=("Segoe UI", 24, "bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(side="left")
+        tk.Label(brand, text="HUB", font=("Segoe UI", 24, "bold"), fg=COLORS["blue"], bg=COLORS["bg"]).pack(side="left", padx=(7,0))
+        tk.Label(brand, text="  GAME CENTER", font=("Segoe UI", 9, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left", padx=(12,0), pady=(10,0))
+        self.platform_box = tk.Frame(header, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+        self.platform_box.pack(side="right")
+        self.pc_btn = tk.Button(self.platform_box, text="▣  PC", command=lambda:self.set_platform("PC"), bd=0, padx=22, pady=11, font=("Segoe UI",10,"bold"), cursor="hand2")
+        self.android_btn = tk.Button(self.platform_box, text="▣  ANDROID", command=lambda:self.set_platform("Android"), bd=0, padx=22, pady=11, font=("Segoe UI",10,"bold"), cursor="hand2")
+        self.pc_btn.pack(side="left")
+        self.android_btn.pack(side="left")
+        hero = tk.Frame(self.root, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+        hero.pack(fill="x", padx=34, pady=(8,20))
+        hero_inner = tk.Frame(hero, bg=COLORS["panel"])
+        hero_inner.pack(fill="x", padx=25, pady=20)
+        tk.Label(hero_inner, text="ТВОИ ИГРЫ. В ОДНОМ МЕСТЕ.", font=("Segoe UI",20,"bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+        tk.Label(hero_inner, text="Выбирай игру — PrimeHub проверит обновления, установит недостающие файлы и запустит её.", font=("Segoe UI",10), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(7,0))
+        row = tk.Frame(hero_inner, bg=COLORS["panel"])
+        row.pack(fill="x", pady=(14,0))
+        self.status = tk.Label(row, text="● Проверка каталога...", font=("Segoe UI",9,"bold"), fg=COLORS["cyan"], bg=COLORS["panel"])
+        self.status.pack(side="left")
+        self.refresh_btn = tk.Button(row, text="Проверить обновления", command=self.check_updates_async, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=14, pady=8, cursor="hand2")
+        self.refresh_btn.pack(side="right")
+        section = tk.Frame(self.root, bg=COLORS["bg"])
+        section.pack(fill="x", padx=34, pady=(0,10))
+        tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI",11,"bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
+        self.count_label = tk.Label(section, text="", font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["bg"])
+        self.count_label.pack(side="right")
+        self.cards = tk.Frame(self.root, bg=COLORS["bg"])
+        self.cards.pack(fill="both", expand=True, padx=34, pady=(0,10))
+        bottom = tk.Frame(self.root, bg=COLORS["bg"])
+        bottom.pack(fill="x", padx=34, pady=(0,20))
+        self.progress = ttk.Progressbar(bottom, style="Hub.Horizontal.TProgressbar", mode="determinate", maximum=100)
+        self.progress.pack(fill="x")
+        self.progress_text = tk.Label(bottom, text="Игры устанавливаются в папку PrimeHub, не на рабочий стол.", font=("Segoe UI",8), fg=COLORS["muted"], bg=COLORS["bg"])
+        self.progress_text.pack(anchor="w", pady=(7,0))
+        self.set_platform("PC")
+
+    def set_platform(self, platform):
+        self.platform = platform
+        for b,p in ((self.pc_btn,"PC"),(self.android_btn,"Android")):
+            active = p == platform
+            b.configure(bg=COLORS["blue"] if active else COLORS["panel"], fg="white" if active else COLORS["muted"])
+        self.refresh_cards()
+
+    def installed_dir(self, game):
+        return GAMES / game
+
+    def needs_update(self, game, tag):
+        return self.is_installed(game) and bool(tag) and self.state.get(game,{}).get("version") != tag
+
+    def is_installed(self, game):
+        p = self.installed_dir(game)
+        if game == "SkyRealm": return (p / "SkyRealm.exe").exists() or (p / "SkyRealm" / "SkyRealm.exe").exists()
+        if game == "PrimeLauncher": return (p / "PrimeLauncher.exe").exists()
+        if game == "PrimeLauncher Mobile": return (p / "PrimeLauncher-Mobile.apk").exists()
+        return False
+
+    def card(self, parent, title, subtitle, version, description, accent, button_text, action, installed=False, available=True):
+        box = tk.Frame(parent, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+        box.pack(side="left", fill="both", expand=True, padx=(0,14))
+        art = tk.Frame(box, bg=accent, height=142)
+        art.pack(fill="x")
+        art.pack_propagate(False)
+        tk.Label(art, text=title.upper(), font=("Segoe UI",21,"bold"), fg="white", bg=accent).place(relx=.08, rely=.32, anchor="w")
+        tk.Label(art, text=subtitle, font=("Segoe UI",9,"bold"), fg="#ffffffcc", bg=accent).place(relx=.08, rely=.60, anchor="w")
+        body = tk.Frame(box, bg=COLORS["panel"])
+        body.pack(fill="both", expand=True, padx=17, pady=15)
+        tk.Label(body, text=version, font=("Segoe UI",9,"bold"), fg=COLORS["cyan"], bg=COLORS["panel"]).pack(anchor="w")
+        tk.Label(body, text=description, justify="left", wraplength=300, font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(7,14))
+        label = ("УСТАНОВЛЕНО" if installed else "ДОСТУПНО ДЛЯ УСТАНОВКИ") if available else "ПОКА НЕДОСТУПНО"
+        tk.Label(body, text="● "+label, font=("Segoe UI",8,"bold"), fg=COLORS["green"] if installed else (COLORS["orange"] if available else COLORS["muted"]), bg=COLORS["panel"]).pack(anchor="w", pady=(0,10))
+        btn = tk.Button(body, text=button_text, command=action if available else None, state="normal" if available else "disabled", bg=COLORS["blue"] if available else COLORS["panel2"], fg="white" if available else COLORS["muted"], activebackground=COLORS["cyan"], activeforeground="#07101d", disabledforeground=COLORS["muted"], bd=0, font=("Segoe UI",9,"bold"), padx=15, pady=10, cursor="hand2" if available else "arrow")
+        btn.pack(fill="x", side="bottom")
+        return box
+
+    def refresh_cards(self):
+        for w in self.cards.winfo_children(): w.destroy()
+        if self.platform == "PC":
+            self.count_label.configure(text="2 игры")
+            sky_tag=self.releases.get("sky",{}).get("tag_name")
+            sky_update=self.needs_update("SkyRealm",sky_tag)
+            sky_installed=self.is_installed("SkyRealm")
+            self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", "PC • Windows", "Открытый мир, приключения, боссы и развитие. Hub устанавливает игру в собственную папку.", "#285f83", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
+            prime_tag=self.releases.get("sky",{}).get("tag_name")
+            prime_update=self.needs_update("PrimeLauncher",prime_tag)
+            prime_installed=self.is_installed("PrimeLauncher")
+            self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная игра PrimeLauncher. Она останется самостоятельной и будет запускаться через Hub.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
+        else:
+            self.count_label.configure(text="1 игра")
+            mobile_tag=self.releases.get("mobile",{}).get("tag_name")
+            mobile_update=self.needs_update("PrimeLauncher Mobile",mobile_tag)
+            mobile_installed=self.is_installed("PrimeLauncher Mobile")
+            self.card(self.cards,"PrimeLauncher","MOBILE • ONLINE", "Android • APK", "Мобильная версия PrimeLauncher. APK скачивается в папку PrimeHub; для установки на телефоне открой файл на Android.", "#59428f", "ОБНОВИТЬ APK" if mobile_update else ("СКАЧАТЬ APK" if not mobile_installed else "APK УСТАНОВЛЕН"), lambda:self.install_game("PrimeLauncher Mobile"), True)
+            note = tk.Frame(self.cards, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+            note.pack(side="left", fill="both", expand=True)
+            tk.Label(note, text="SKYREALM", font=("Segoe UI",19,"bold"), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18, pady=(22,8))
+            tk.Label(note, text="Android-версия пока не опубликована. Как только появится официальный APK, она автоматически появится здесь.", wraplength=290, justify="left", font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18)
+        self.root.update_idletasks()
+
+    def set_status(self, msg, color=None):
+        self.root.after(0, lambda:self.status.configure(text="● "+msg, fg=color or COLORS["cyan"]))
+
+    def set_progress(self, value, msg):
+        def apply():
+            self.progress["value"] = value
+            self.progress_text.configure(text=msg)
+        self.root.after(0, apply)
+
+    def fetch_json(self, url):
+        req=urllib.request.Request(url,headers=HEADERS)
+        with urllib.request.urlopen(req,timeout=20) as r: return json.loads(r.read().decode("utf-8"))
+
+    def check_updates_async(self):
+        if self.busy: return
+        threading.Thread(target=self.check_updates,daemon=True).start()
+
+    def check_updates(self):
+        self.busy=True
+        auto_updates=[]
+        self.set_status("Проверяем официальные версии...")
+        try:
+            sky=self.fetch_json(API_SKY)
+            self.releases["sky"]=sky
+            mob=self.fetch_json(API_PRIME_MOBILE)
+            self.releases["mobile"]=mob
+            try:
+                hub=self.fetch_json(API_HUB)
+                self.check_hub_update(hub)
+            except Exception:
+                pass
+            if self.needs_update("SkyRealm",sky.get("tag_name")): auto_updates.append("SkyRealm")
+            if self.needs_update("PrimeLauncher",sky.get("tag_name")): auto_updates.append("PrimeLauncher")
+            if self.needs_update("PrimeLauncher Mobile",mob.get("tag_name")): auto_updates.append("PrimeLauncher Mobile")
+            self.root.after(0,self.refresh_cards)
+            self.set_status("Каталог обновлён • "+sky.get("tag_name","")+" / "+mob.get("tag_name",""),COLORS["green"])
+            self.set_progress(0,"Проверка завершена. Установщики и игры сохраняются внутри папки PrimeHub.")
+        except Exception as e:
+            self.set_status("Нет соединения с сервером обновлений",COLORS["orange"])
+            self.set_progress(0,"Не удалось проверить обновления: "+str(e))
+        finally:
+            self.busy=False
+            if auto_updates:
+                self.root.after(1800,lambda:self.install_game(auto_updates[0]))
+
+    def check_hub_update(self, release):
+        if not getattr(sys, "frozen", False):
+            return
+        asset = self.find_asset(release, "PrimeHub.exe")
+        if not asset:
+            return
+        stamp = str(asset.get("updated_at") or asset.get("id") or release.get("tag_name"))
+        if self.state.get("hub_asset_stamp") == stamp:
+            return
+        current = Path(sys.executable).resolve()
+        update_dir = ROOT / "updates"
+        staged = update_dir / "PrimeHub.next.exe"
+        script = update_dir / "apply-hub-update.cmd"
+        self.set_status("Доступно обновление PrimeHub — загружаем...")
+        self.download(asset["browser_download_url"], staged)
+        lines = [
+            "@echo off",
+            "setlocal",
+            ":retry",
+            f'copy /y "{staged}" "{current}" >nul 2>&1',
+            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)",
+            f'start "" "{current}"',
+            f'del /q "{staged}"',
+            'del "%~f0"'
+        ]
+        script.write_text("\r\n".join(lines), encoding="utf-8")
+        self.state["hub_asset_stamp"] = stamp
+        self.save_state()
+        subprocess.Popen(["cmd.exe", "/c", "start", "/min", "", str(script)], creationflags=0x08000000)
+        self.root.after(0, self.root.destroy)
+
+    def find_asset(self, release, name):
+        for a in release.get("assets",[]):
+            if a.get("name","").lower()==name.lower(): return a
+        return None
+
+    def download(self, url, target):
+        target.parent.mkdir(parents=True,exist_ok=True)
+        req=urllib.request.Request(url,headers={"User-Agent":"PrimeHub/1.0"})
+        with urllib.request.urlopen(req,timeout=60) as response, open(target,"wb") as out:
+            total=int(response.headers.get("Content-Length",0)); done=0
+            while True:
+                chunk=response.read(1024*512)
+                if not chunk: break
+                out.write(chunk); done+=len(chunk)
+                pct=int(done*100/total) if total else 0
+                self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ")
+        return target
+
+    def install_game(self, game):
+        if self.busy: return
+        threading.Thread(target=self._install_game,args=(game,),daemon=True).start()
+
+    def _install_game(self, game):
+        self.busy=True
+        try:
+            GAMES.mkdir(parents=True,exist_ok=True)
+            if game=="SkyRealm":
+                rel=self.releases.get("sky") or self.fetch_json(API_SKY)
+                asset=self.find_asset(rel,"SkyRealm_Windows.zip")
+                if not asset: raise RuntimeError("В последнем релизе не найден SkyRealm_Windows.zip")
+                dest=self.installed_dir("SkyRealm")
+                archive=ROOT/"cache"/"SkyRealm_Windows.zip"
+                self.set_status("Устанавливаем SkyRealm...")
+                self.download(asset["browser_download_url"],archive)
+                self.set_progress(0,"Распаковка SkyRealm в "+str(dest))
+                tmp=ROOT/"staging"/"SkyRealm"
+                if tmp.exists(): shutil.rmtree(tmp)
+                tmp.mkdir(parents=True,exist_ok=True)
+                with zipfile.ZipFile(archive) as z: z.extractall(tmp)
+                if dest.exists(): shutil.rmtree(dest)
+                dest.mkdir(parents=True,exist_ok=True)
+                # Keep the release's directory structure intact.
+                for item in tmp.iterdir():
+                    target=dest/item.name
+                    if item.is_dir(): shutil.move(str(item),str(target))
+                    else: shutil.move(str(item),str(target))
+                shutil.rmtree(tmp,ignore_errors=True)
+                self.state["SkyRealm"]={"version":rel.get("tag_name"),"installed":int(time.time())}
+                self.save_state()
+                self.set_status("SkyRealm установлен",COLORS["green"])
+                self.set_progress(100,"SkyRealm готов. Нажми «Запустить» в карточке.")
+            elif game=="PrimeLauncher":
+                rel=self.releases.get("sky") or self.fetch_json(API_SKY)
+                asset=self.find_asset(rel,"PrimeLauncher.exe")
+                if not asset: raise RuntimeError("В последнем релизе не найден PrimeLauncher.exe")
+                dest=self.installed_dir("PrimeLauncher")
+                dest.mkdir(parents=True,exist_ok=True)
+                target=dest/"PrimeLauncher.exe"
+                self.set_status("Устанавливаем PrimeLauncher...")
+                self.download(asset["browser_download_url"],target)
+                self.state["PrimeLauncher"]={"version":rel.get("tag_name"),"installed":int(time.time())}
+                self.save_state()
+                self.set_status("PrimeLauncher установлен",COLORS["green"])
+                self.set_progress(100,"PrimeLauncher установлен. Старый отдельный лаунчер не удалён.")
+            else:
+                rel=self.releases.get("mobile") or self.fetch_json(API_PRIME_MOBILE)
+                asset=self.find_asset(rel,"PrimeLauncher-Mobile.apk")
+                if not asset: raise RuntimeError("В последнем мобильном релизе не найден APK")
+                dest=self.installed_dir("PrimeLauncher Mobile")
+                dest.mkdir(parents=True,exist_ok=True)
+                target=dest/"PrimeLauncher-Mobile.apk"
+                self.set_status("Скачиваем Android APK...")
+                self.download(asset["browser_download_url"],target)
+                self.state["PrimeLauncher Mobile"]={"version":rel.get("tag_name"),"installed":int(time.time())}
+                self.save_state()
+                self.set_status("APK скачан",COLORS["green"])
+                self.set_progress(100,"APK сохранён в "+str(target)+" — открой его на Android для установки.")
+            self.root.after(0,self.refresh_cards)
+        except Exception as e:
+            self.set_status("Не удалось завершить установку",COLORS["orange"])
+            self.set_progress(0,str(e))
+            self.root.after(0,lambda:messagebox.showerror("PrimeHub",str(e)))
+        finally: self.busy=False
+
+    def launch_game(self, game):
+        base=self.installed_dir(game)
+        candidates=[base/"SkyRealm.exe",base/"SkyRealm"/"SkyRealm.exe"] if game=="SkyRealm" else [base/"PrimeLauncher.exe"]
+        exe=next((p for p in candidates if p.exists()),None)
+        if not exe:
+            messagebox.showinfo("PrimeHub","Игра ещё не установлена. Нажми «Установить».")
+            return
+        try: subprocess.Popen([str(exe)],cwd=str(exe.parent))
+        except Exception as e: messagebox.showerror("Не удалось запустить",str(e))
+
+if __name__=="__main__":
+    ROOT.mkdir(parents=True,exist_ok=True)
+    app=tk.Tk()
+    PrimeHub(app)
+    app.mainloop()
