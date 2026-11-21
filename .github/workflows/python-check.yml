@@ -1,0 +1,36 @@
+name: PrimeHub checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/primehub-account-apocalypse]
+
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile PrimeHub
+        run: python -m py_compile primehub.py
+      - name: Check auth and Apocalypse entry points
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("primehub.py").read_text(encoding="utf-8")
+          required = (
+              "def submit_register(self):",
+              "def submit_verify(self):",
+              "def submit_login(self):",
+              "def launch_apocalypse(self):",
+              'headers["Authorization"] = "Bearer "',
+              '"apikey": API_KEY',
+          )
+          missing = [item for item in required if item not in source]
+          if missing:
+              raise SystemExit("Missing PrimeHub integration: " + ", ".join(missing))
+          print("PrimeHub account and Apocalypse integration checks passed.")
+          PY
