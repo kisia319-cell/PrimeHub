@@ -9,6 +9,8 @@ PrimeHub is a Windows desktop game hub for installing, updating, and launching t
 - Checks installed games for newer versions.
 - Keeps installed games under `%LOCALAPPDATA%\PrimeHub\Games`.
 - Checks for PrimeHub updates from this repository's own latest GitHub Release. The release must include an asset named `PrimeHub.exe`.
+- Open registration and login using the SkyRealm Auth API, with email verification.
+- Separate Apocalypse entry card that launches the dedicated SkyRealm Apocalypse mode.
 
 ## Build
 1. Install Python 3 and PyInstaller: `py -m pip install pyinstaller`.
