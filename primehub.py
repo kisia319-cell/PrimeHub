@@ -242,21 +242,37 @@ class PrimeHub:
         script = update_dir / "apply-hub-update.cmd"
         self.set_status("Доступно обновление PrimeHub — загружаем...")
         self.download(asset["browser_download_url"], staged)
+        # Refuse to replace the running Hub with a truncated/non-Windows download.
+        if not staged.is_file() or staged.stat().st_size < 1_000_000:
+            raise RuntimeError("Обновление PrimeHub скачалось не полностью. Старую версию оставили без изменений.")
+        with staged.open("rb") as check:
+            if check.read(2) != b"MZ":
+                raise RuntimeError("Файл обновления PrimeHub повреждён или не является Windows EXE. Старая версия сохранена.")
+        staged_size = staged.stat().st_size
+        temp_current = current.with_name(current.name + ".new")
         lines = [
             "@echo off",
             "setlocal",
+            "set \"STAGED=" + str(staged) + "\"",
+            "set \"CURRENT=" + str(current) + "\"",
+            "set \"TEMPFILE=" + str(temp_current) + "\"",
             ":retry",
-            f'copy /y "{staged}" "{current}" >nul 2>&1',
+            "copy /b /y \"%STAGED%\" \"%TEMPFILE%\" >nul 2>&1",
             "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)",
-            f'start "" "{current}"',
-            f'del /q "{staged}"',
+            "for %%A in (\"%STAGED%\") do set \"SOURCE_SIZE=%%~zA\"",
+            "for %%A in (\"%TEMPFILE%\") do set \"COPY_SIZE=%%~zA\"",
+            "if not \"%SOURCE_SIZE%\"==\"%COPY_SIZE%\" (del /q \"%TEMPFILE%\" >nul 2>&1 & timeout /t 1 /nobreak >nul & goto retry)",
+            "move /y \"%TEMPFILE%\" \"%CURRENT%\" >nul 2>&1",
+            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)",
+            "start \"\" \"%CURRENT%\"",
+            "del /q \"%STAGED%\" >nul 2>&1",
             'del "%~f0"'
         ]
         script.write_text("\r\n".join(lines), encoding="utf-8")
         self.state["hub_asset_stamp"] = stamp
         self.save_state()
         subprocess.Popen(["cmd.exe", "/c", "start", "/min", "", str(script)], creationflags=0x08000000)
-        self.root.after(0, self.root.destroy)
+        self.root.after(1200, self.root.destroy)
 
     def find_asset(self, release, name):
         for a in release.get("assets",[]):
@@ -266,14 +282,23 @@ class PrimeHub:
     def download(self, url, target):
         target.parent.mkdir(parents=True,exist_ok=True)
         req=urllib.request.Request(url,headers={"User-Agent":"PrimeHub/1.0"})
-        with urllib.request.urlopen(req,timeout=60) as response, open(target,"wb") as out:
-            total=int(response.headers.get("Content-Length",0)); done=0
-            while True:
-                chunk=response.read(1024*512)
-                if not chunk: break
-                out.write(chunk); done+=len(chunk)
-                pct=int(done*100/total) if total else 0
-                self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ")
+        try:
+            with urllib.request.urlopen(req,timeout=90) as response, open(target,"wb") as out:
+                total=int(response.headers.get("Content-Length",0)); done=0
+                while True:
+                    chunk=response.read(1024*512)
+                    if not chunk: break
+                    out.write(chunk); done+=len(chunk)
+                    pct=int(done*100/total) if total else 0
+                    self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ")
+                out.flush()
+                os.fsync(out.fileno())
+            if total and done != total:
+                raise RuntimeError(f"Загрузка оборвалась: получено {done} из {total} байт.")
+        except Exception:
+            try: target.unlink(missing_ok=True)
+            except Exception: pass
+            raise
         return target
 
     def install_game(self, game):
