@@ -371,6 +371,10 @@ class PrimeHub:
         version_file = game_dir / "version.txt"
         if not index.is_file() or not script.is_file() or not version_file.is_file():
             raise RuntimeError("Архив игры неполный: отсутствует index.html, game.js или version.txt.")
+        if game == "Apocalypse":
+            game_source = script.read_text(encoding="utf-8")
+            if "IS_APOCALYPSE_MODE" not in game_source or "skyrealm_apocalypse_worlds_v1" not in game_source:
+                raise RuntimeError("Пакет игры не содержит отдельный Apocalypse-режим. Обновление не установлено, прежняя версия сохранена.")
         with runner.open("rb") as stream:
             if stream.read(2) != b"MZ" or runner.stat().st_size < 1_000_000:
                 raise RuntimeError("Игровой запускатель повреждён или не является Windows EXE.")
