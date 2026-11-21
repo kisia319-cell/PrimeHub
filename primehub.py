@@ -11,6 +11,7 @@ API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/relea
 API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/PrimeLauncher-Mobile/releases/latest"
 API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
+API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
 
 COLORS = {"bg":"#0b1020","panel":"#121a2d","panel2":"#18243b","line":"#263650","text":"#eef4ff","muted":"#91a3bf","blue":"#4d8dff","cyan":"#55d5e8","green":"#54d69a","orange":"#ffbd66"}
@@ -322,7 +323,8 @@ class PrimeHub:
                     self.session = None
                     raise RuntimeError("Сессия истекла. Войди в аккаунт снова.")
         url = API_AUTH + "?route=" + urllib.parse.quote(route, safe="/")
-        headers = {"User-Agent": "PrimeHub/1.0", "Accept": "application/json"}
+        headers = {"User-Agent": "PrimeHub/1.0", "Accept": "application/json", "apikey": API_KEY}
+        headers["Authorization"] = "Bearer " + (self.session.get("access_token") if use_auth and self.session and self.session.get("access_token") else API_KEY)
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if use_auth and self.session and self.session.get("access_token"):
