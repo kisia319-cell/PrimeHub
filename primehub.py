@@ -1,4 +1,4 @@
-import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -7,9 +7,9 @@ APP_NAME = "PrimeHub"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
-API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
-API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
-API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
+API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
+API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
+API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
@@ -161,8 +161,34 @@ class PrimeHub:
         self.root.after(0, apply)
 
     def fetch_json(self, url):
+        # GitHub's unauthenticated REST API is limited to 60 requests/hour per public IP.
+        # Read the public Releases page instead, so every PrimeHub user does not share that API limit.
+        if url.startswith("https://github.com/") and url.rstrip("/").endswith("/releases/latest"):
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=25) as response:
+                page = response.read().decode("utf-8", errors="replace")
+                final_url = response.geturl()
+            tag_match = re.search(r"/releases/tag/([^/?#]+)", final_url)
+            if not tag_match:
+                canonical = re.search(r'<meta[^>]+property=["\\']og:url["\\'][^>]+content=["\\']([^"\\']+)', page, re.I)
+                if canonical:
+                    tag_match = re.search(r"/releases/tag/([^/?#]+)", html.unescape(canonical.group(1)))
+            if not tag_match:
+                raise RuntimeError("GitHub не вернул страницу последнего релиза: " + url)
+            tag = urllib.parse.unquote(tag_match.group(1))
+            assets = []
+            seen = set()
+            for match in re.finditer(r'href=["\\']([^"\\']*/releases/download/[^"\\']+)["\\']', page, re.I):
+                href = html.unescape(match.group(1))
+                asset_url = urllib.parse.urljoin("https://github.com", href)
+                asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
+                if asset_name and asset_name not in seen:
+                    seen.add(asset_name)
+                    assets.append({"name": asset_name, "browser_download_url": asset_url})
+            return {"tag_name": tag, "assets": assets}
         req=urllib.request.Request(url,headers=HEADERS)
-        with urllib.request.urlopen(req,timeout=20) as r: return json.loads(r.read().decode("utf-8"))
+        with urllib.request.urlopen(req,timeout=20) as r:
+            return json.loads(r.read().decode("utf-8"))
 
     def check_updates_async(self):
         if self.busy: return
