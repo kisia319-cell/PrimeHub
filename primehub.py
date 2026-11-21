@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
+APP_VERSION = "v1.0.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -229,6 +230,9 @@ class PrimeHub:
 
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
+            return
+        # Do not replace an executable with the same release that is already running.
+        if str(release.get("tag_name", "")).lower() == APP_VERSION.lower():
             return
         asset = self.find_asset(release, "PrimeHub.exe")
         if not asset:
