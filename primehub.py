@@ -170,15 +170,20 @@ class PrimeHub:
                 final_url = response.geturl()
             tag_match = re.search(r"/releases/tag/([^/?#]+)", final_url)
             if not tag_match:
-                canonical = re.search(r'<meta[^>]+property=["\\']og:url["\\'][^>]+content=["\\']([^"\\']+)', page, re.I)
-                if canonical:
-                    tag_match = re.search(r"/releases/tag/([^/?#]+)", html.unescape(canonical.group(1)))
-            if not tag_match:
                 raise RuntimeError("GitHub не вернул страницу последнего релиза: " + url)
             tag = urllib.parse.unquote(tag_match.group(1))
+            repo_path = urllib.parse.urlsplit(url).path.rsplit("/releases/latest", 1)[0]
+            assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
+            assets_page = page
+            try:
+                asset_req = urllib.request.Request(assets_page_url, headers=HEADERS)
+                with urllib.request.urlopen(asset_req, timeout=20) as asset_response:
+                    assets_page = asset_response.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
             assets = []
             seen = set()
-            for match in re.finditer(r'href=["\\']([^"\\']*/releases/download/[^"\\']+)["\\']', page, re.I):
+            for match in re.finditer(r'href="([^"]*/releases/download/[^"]+)"', assets_page, re.I):
                 href = html.unescape(match.group(1))
                 asset_url = urllib.parse.urljoin("https://github.com", href)
                 asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
