@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.0.6"
+APP_VERSION = "v1.0.7"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -105,7 +105,7 @@ class PrimeHub:
     def is_installed(self, game):
         p = self.installed_dir(game)
         if game in ("SkyRealm", "Apocalypse"):
-            return (p / "game" / "index.html").is_file() and (p / "runtime" / "SkyRealm.exe").is_file()
+            return (p / "game" / "index.html").is_file() and (p / "runtime" / "SkyRealmGame.exe").is_file()
         if game == "PrimeLauncher":
             return (p / "PrimeLauncher.exe").exists()
         if game == "PrimeLauncher Mobile":
@@ -358,12 +358,12 @@ class PrimeHub:
         self.set_progress(0, "Распаковываем отдельную копию " + game + "...")
         self._safe_extract_zip(game_archive, game_dir)
         self._safe_extract_zip(runtime_archive, runtime_extract)
-        runner_candidates = [p for p in runtime_extract.rglob("SkyRealm.exe") if p.is_file()]
+        runner_candidates = [p for p in runtime_extract.rglob("SkyRealmGame.exe") if p.is_file()]
         if len(runner_candidates) != 1:
-            raise RuntimeError("В установочном пакете не найден единственный SkyRealm.exe.")
+            raise RuntimeError("В пакете нет отдельного игрового запускающего файла SkyRealmGame.exe. Обнови игровой пакет и повтори установку.")
         runtime_dir = staging_root / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        runner = runtime_dir / "SkyRealm.exe"
+        runner = runtime_dir / "SkyRealmGame.exe"
         shutil.copy2(runner_candidates[0], runner)
         shutil.rmtree(runtime_extract, ignore_errors=True)
         index = game_dir / "index.html"
@@ -621,7 +621,7 @@ class PrimeHub:
     def launch_game(self, game):
         if game in ("SkyRealm", "Apocalypse"):
             base = self.installed_dir(game)
-            exe = base / "runtime" / "SkyRealm.exe"
+            exe = base / "runtime" / "SkyRealmGame.exe"
             index = base / "game" / "index.html"
             if not exe.is_file() or not index.is_file():
                 messagebox.showinfo("PrimeHub", "Сначала установи " + game + " через соответствующую карточку.")
@@ -632,9 +632,10 @@ class PrimeHub:
                     env["SKYREALM_GAME_MODE"] = "apocalypse"
                 else:
                     env.pop("SKYREALM_GAME_MODE", None)
+                mode = "apocalypse" if game == "Apocalypse" else "normal"
                 flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-                subprocess.Popen([str(exe), "--skyrealm-game", str(index)], cwd=str(index.parent),
-                                 env=env, close_fds=True, creationflags=flags)
+                subprocess.Popen([str(exe), "--skyrealm-game", str(index), "--mode", mode],
+                                 cwd=str(index.parent), env=env, close_fds=True, creationflags=flags)
             except Exception as exc:
                 messagebox.showerror("Не удалось запустить " + game, str(exc))
             return
