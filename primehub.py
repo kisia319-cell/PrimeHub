@@ -1,19 +1,45 @@
-import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html, ctypes
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.0.7"
+APP_VERSION = "v1.0.8"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
+AUTH_SESSION = ROOT / "auth-session.bin"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
+
+
+class _DATA_BLOB(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_ulong), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _dpapi_transform(raw: bytes, protect: bool) -> bytes:
+    """Encrypt/decrypt small local secrets with the current Windows user's DPAPI."""
+    if os.name != "nt":
+        raise OSError("Windows DPAPI is unavailable")
+    source_buffer = ctypes.create_string_buffer(raw)
+    source = _DATA_BLOB(len(raw), ctypes.cast(source_buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    target = _DATA_BLOB()
+    crypt = ctypes.windll.crypt32
+    kernel = ctypes.windll.kernel32
+    if protect:
+        ok = crypt.CryptProtectData(ctypes.byref(source), "PrimeHub auth session", None, None, None, 0x1, ctypes.byref(target))
+    else:
+        ok = crypt.CryptUnprotectData(ctypes.byref(source), None, None, None, None, 0x1, ctypes.byref(target))
+    if not ok:
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(target.pbData, target.cbData)
+    finally:
+        kernel.LocalFree(target.pbData)
 
 COLORS = {"bg":"#0b1020","panel":"#121a2d","panel2":"#18243b","line":"#263650","text":"#eef4ff","muted":"#91a3bf","blue":"#4d8dff","cyan":"#55d5e8","green":"#54d69a","orange":"#ffbd66"}
 
@@ -28,11 +54,12 @@ class PrimeHub:
         self.releases = {}
         self.busy = False
         self.state = self.load_state()
-        self.session = None  # Session tokens stay in memory; passwords are never saved locally.
+        self.session = None  # Only the rotating refresh token is persisted, encrypted with Windows DPAPI.
         self.pending_email = ""
         self.account_window = None
         self.build_ui()
         self.refresh_cards()
+        self.root.after(250, self.restore_auth_session_async)
         self.root.after(700, self.check_updates_async)
 
     def load_state(self):
@@ -447,6 +474,65 @@ class PrimeHub:
         finally: self.busy=False
 
 
+    def save_auth_session(self):
+        """Persist only the rotating refresh token, encrypted for this Windows user."""
+        token = (self.session or {}).get("refresh_token", "")
+        if not token:
+            return
+        try:
+            ROOT.mkdir(parents=True, exist_ok=True)
+            encrypted = _dpapi_transform(token.encode("utf-8"), True)
+            temp = AUTH_SESSION.with_suffix(".tmp")
+            temp.write_bytes(encrypted)
+            os.replace(temp, AUTH_SESSION)
+        except Exception:
+            # Never fall back to writing an unencrypted token to disk.
+            try:
+                AUTH_SESSION.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def clear_auth_session(self):
+        try:
+            AUTH_SESSION.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def restore_auth_session_async(self):
+        """Refresh a saved session in the background so Hub startup stays responsive."""
+        if os.name != "nt" or not AUTH_SESSION.is_file():
+            return
+        def worker():
+            try:
+                encrypted = AUTH_SESSION.read_bytes()
+                refresh_token = _dpapi_transform(encrypted, False).decode("utf-8")
+                if not refresh_token or len(refresh_token) > 4096:
+                    raise ValueError("Invalid saved refresh token")
+                refreshed = self.auth_api("/api/auth/refresh", {"refresh_token": refresh_token}, use_auth=False)
+                if not refreshed.get("access_token") or not refreshed.get("refresh_token") or not refreshed.get("user"):
+                    raise RuntimeError("Invalid refresh response")
+                refreshed["expires_at"] = time.time() + int(refreshed.get("expires_in", 3600))
+                # Store the rotated token before publishing the session to the UI.
+                encrypted_next = _dpapi_transform(refreshed["refresh_token"].encode("utf-8"), True)
+                temp = AUTH_SESSION.with_suffix(".tmp")
+                temp.write_bytes(encrypted_next)
+                os.replace(temp, AUTH_SESSION)
+                self.root.after(0, lambda data=refreshed: self._restore_auth_session_complete(data))
+            except urllib.error.URLError:
+                # Keep the saved token when offline; the next start can retry.
+                return
+            except Exception:
+                # A corrupt or revoked local token must not be treated as signed in.
+                try:
+                    AUTH_SESSION.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _restore_auth_session_complete(self, data):
+        self.session = dict(data)
+        self.update_account_button()
+
     def auth_api(self, route, payload=None, use_auth=True):
         if use_auth and self.session and route != "/api/auth/refresh":
             if self.session.get("expires_at", 0) <= time.time() + 60:
@@ -454,6 +540,7 @@ class PrimeHub:
                     refreshed = self.auth_api("/api/auth/refresh", {"refresh_token": self.session.get("refresh_token", "")}, use_auth=False)
                     self.session.update(refreshed)
                     self.session["expires_at"] = time.time() + int(refreshed.get("expires_in", 3600))
+                    self.save_auth_session()
                 except Exception:
                     self.session = None
                     raise RuntimeError("Сессия истекла. Войди в аккаунт снова.")
@@ -554,6 +641,7 @@ class PrimeHub:
     def accept_session(self, data):
         self.session = dict(data)
         self.session["expires_at"] = time.time() + int(data.get("expires_in", 3600))
+        self.save_auth_session()
         self.update_account_button()
         if self.account_window and self.account_window.winfo_exists():
             self.account_window.destroy()
@@ -616,6 +704,7 @@ class PrimeHub:
         except Exception:
             pass
         self.session = None
+        self.clear_auth_session()
         self.update_account_button()
         self.account_window.destroy()
 
