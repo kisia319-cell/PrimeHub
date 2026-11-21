@@ -8,7 +8,7 @@ ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
-API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/PrimeLauncher-Mobile/releases/latest"
+API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
@@ -105,7 +105,7 @@ class PrimeHub:
         p = self.installed_dir(game)
         if game == "SkyRealm": return (p / "SkyRealm.exe").exists() or (p / "SkyRealm" / "SkyRealm.exe").exists()
         if game == "PrimeLauncher": return (p / "PrimeLauncher.exe").exists()
-        if game == "PrimeLauncher Mobile": return (p / "PrimeLauncher-Mobile.apk").exists()
+        if game == "PrimeLauncher Mobile": return (p / "SkyRealm-Hub.apk").exists() or (p / "PrimeLauncher-Mobile.apk").exists()
         return False
 
     def card(self, parent, title, subtitle, version, description, accent, button_text, action, installed=False, available=True):
@@ -144,7 +144,7 @@ class PrimeHub:
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
             mobile_update=self.needs_update("PrimeLauncher Mobile",mobile_tag)
             mobile_installed=self.is_installed("PrimeLauncher Mobile")
-            self.card(self.cards,"PrimeLauncher","MOBILE • ONLINE", "Android • APK", "Мобильная версия PrimeLauncher. APK скачивается в папку PrimeHub; для установки на телефоне открой файл на Android.", "#59428f", "ОБНОВИТЬ APK" if mobile_update else ("СКАЧАТЬ APK" if not mobile_installed else "APK УСТАНОВЛЕН"), lambda:self.install_game("PrimeLauncher Mobile"), True)
+            self.card(self.cards,"SkyRealm Hub","MOBILE • ACCOUNT", "Android • APK", "Мобильный Hub SkyRealm. APK скачивается из официального репозитория и сохраняется в папке PrimeHub.", "#59428f", "ОБНОВИТЬ APK" if mobile_update else ("СКАЧАТЬ APK" if not mobile_installed else "APK УСТАНОВЛЕН"), lambda:self.install_game("PrimeLauncher Mobile"), mobile_installed)
             note = tk.Frame(self.cards, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
             note.pack(side="left", fill="both", expand=True)
             tk.Label(note, text="SKYREALM", font=("Segoe UI",19,"bold"), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18, pady=(22,8))
@@ -293,17 +293,17 @@ class PrimeHub:
                 self.set_progress(100,"PrimeLauncher установлен. Старый отдельный лаунчер не удалён.")
             else:
                 rel=self.releases.get("mobile") or self.fetch_json(API_PRIME_MOBILE)
-                asset=self.find_asset(rel,"PrimeLauncher-Mobile.apk")
+                asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
                 if not asset: raise RuntimeError("В последнем мобильном релизе не найден APK")
                 dest=self.installed_dir("PrimeLauncher Mobile")
                 dest.mkdir(parents=True,exist_ok=True)
-                target=dest/"PrimeLauncher-Mobile.apk"
+                target=dest/"SkyRealm-Hub.apk"
                 self.set_status("Скачиваем Android APK...")
                 self.download(asset["browser_download_url"],target)
                 self.state["PrimeLauncher Mobile"]={"version":rel.get("tag_name"),"installed":int(time.time())}
                 self.save_state()
                 self.set_status("APK скачан",COLORS["green"])
-                self.set_progress(100,"APK сохранён в "+str(target)+" — открой его на Android для установки.")
+                self.set_progress(100,"SkyRealm Hub APK сохранён в "+str(target)+" — открой его на Android для установки.")
             self.root.after(0,self.refresh_cards)
         except Exception as e:
             self.set_status("Не удалось завершить установку",COLORS["orange"])
