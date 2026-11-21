@@ -11,7 +11,7 @@ GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
-API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/tags/" + APOCALYPSE_PC_VERSION
+API_APOCALYPSE_PC = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/" + APOCALYPSE_PC_VERSION
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
@@ -205,26 +205,33 @@ class PrimeHub:
         self.root.after(0, apply)
 
     def fetch_json(self, url):
-        # GitHub's unauthenticated REST API is limited to 60 requests/hour per public IP.
-        # Read the public Releases page instead, so every PrimeHub user does not share that API limit.
-        if url.startswith("https://github.com/") and url.rstrip("/").endswith("/releases/latest"):
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=25) as response:
+        # Prefer public GitHub release pages over the unauthenticated REST API.
+        # The REST API is rate-limited (403) and is frequently unavailable to users
+        # behind shared or regional NAT addresses.
+        parsed = urllib.parse.urlsplit(url)
+        release_prefix = "/releases/"
+        if parsed.netloc.lower() == "github.com" and release_prefix in parsed.path:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.1"})
+            with urllib.request.urlopen(req, timeout=30) as response:
                 page = response.read().decode("utf-8", errors="replace")
                 final_url = response.geturl()
-            tag_match = re.search(r"/releases/tag/([^/?#]+)", final_url)
-            if not tag_match:
-                raise RuntimeError("GitHub не вернул страницу последнего релиза: " + url)
-            tag = urllib.parse.unquote(tag_match.group(1))
-            repo_path = urllib.parse.urlsplit(url).path.rsplit("/releases/latest", 1)[0]
+
+            final_path = urllib.parse.urlsplit(final_url).path
+            tag_match = re.search(r"/releases/tag/([^/?#]+)", final_path)
+            if tag_match:
+                tag = urllib.parse.unquote(tag_match.group(1))
+            else:
+                requested_tag = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
+                if not requested_tag:
+                    raise RuntimeError("GitHub не вернул страницу последнего релиза: " + url)
+                tag = urllib.parse.unquote(requested_tag.group(1))
+
+            repo_path = parsed.path.split(release_prefix, 1)[0]
             assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
-            assets_page = page
-            try:
-                asset_req = urllib.request.Request(assets_page_url, headers=HEADERS)
-                with urllib.request.urlopen(asset_req, timeout=20) as asset_response:
-                    assets_page = asset_response.read().decode("utf-8", errors="replace")
-            except Exception:
-                pass
+            assets_req = urllib.request.Request(assets_page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.1"})
+            with urllib.request.urlopen(assets_req, timeout=30) as asset_response:
+                assets_page = asset_response.read().decode("utf-8", errors="replace")
+
             assets = []
             seen = set()
             for match in re.finditer(r'href="([^"]*/releases/download/[^"]+)"', assets_page, re.I):
@@ -234,10 +241,12 @@ class PrimeHub:
                 if asset_name and asset_name not in seen:
                     seen.add(asset_name)
                     assets.append({"name": asset_name, "browser_download_url": asset_url})
-            return {"tag_name": tag, "assets": assets}
-        req=urllib.request.Request(url,headers=HEADERS)
-        with urllib.request.urlopen(req,timeout=20) as r:
-            return json.loads(r.read().decode("utf-8"))
+
+            return {"tag_name": tag, "html_url": final_url, "assets": assets}
+
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     def check_updates_async(self):
         if self.busy: return
