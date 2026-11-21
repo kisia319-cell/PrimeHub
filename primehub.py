@@ -115,7 +115,7 @@ class PrimeHub:
         art.pack(fill="x")
         art.pack_propagate(False)
         tk.Label(art, text=title.upper(), font=("Segoe UI",21,"bold"), fg="white", bg=accent).place(relx=.08, rely=.32, anchor="w")
-        tk.Label(art, text=subtitle, font=("Segoe UI",9,"bold"), fg="#ffffffcc", bg=accent).place(relx=.08, rely=.60, anchor="w")
+        tk.Label(art, text=subtitle, font=("Segoe UI",9,"bold"), fg="#ffffff", bg=accent).place(relx=.08, rely=.60, anchor="w")
         body = tk.Frame(box, bg=COLORS["panel"])
         body.pack(fill="both", expand=True, padx=17, pady=15)
         tk.Label(body, text=version, font=("Segoe UI",9,"bold"), fg=COLORS["cyan"], bg=COLORS["panel"]).pack(anchor="w")
