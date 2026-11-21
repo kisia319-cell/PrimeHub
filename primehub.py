@@ -1,4 +1,4 @@
-import os, sys, json, time, shutil, threading, urllib.request, urllib.error, zipfile, subprocess
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -10,6 +10,7 @@ DATA = ROOT / "hub-state.json"
 API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/PrimeLauncher-Mobile/releases/latest"
 API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
+API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
 
 COLORS = {"bg":"#0b1020","panel":"#121a2d","panel2":"#18243b","line":"#263650","text":"#eef4ff","muted":"#91a3bf","blue":"#4d8dff","cyan":"#55d5e8","green":"#54d69a","orange":"#ffbd66"}
@@ -25,6 +26,9 @@ class PrimeHub:
         self.releases = {}
         self.busy = False
         self.state = self.load_state()
+        self.session = None  # Session tokens stay in memory; passwords are never saved locally.
+        self.pending_email = ""
+        self.account_window = None
         self.build_ui()
         self.refresh_cards()
         self.root.after(700, self.check_updates_async)
@@ -54,6 +58,8 @@ class PrimeHub:
         self.android_btn = tk.Button(self.platform_box, text="▣  ANDROID", command=lambda:self.set_platform("Android"), bd=0, padx=22, pady=11, font=("Segoe UI",10,"bold"), cursor="hand2")
         self.pc_btn.pack(side="left")
         self.android_btn.pack(side="left")
+        self.account_btn = tk.Button(header, text="Войти / Регистрация", command=self.open_account, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=15, pady=11, font=("Segoe UI",9,"bold"), cursor="hand2")
+        self.account_btn.pack(side="right", padx=(0,12))
         hero = tk.Frame(self.root, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
         hero.pack(fill="x", padx=34, pady=(8,20))
         hero_inner = tk.Frame(hero, bg=COLORS["panel"])
@@ -302,6 +308,178 @@ class PrimeHub:
             self.set_progress(0,str(e))
             self.root.after(0,lambda:messagebox.showerror("PrimeHub",str(e)))
         finally: self.busy=False
+
+
+    def auth_api(self, route, payload=None, use_auth=True):
+        if use_auth and self.session and route != "/api/auth/refresh":
+            if self.session.get("expires_at", 0) <= time.time() + 60:
+                try:
+                    refreshed = self.auth_api("/api/auth/refresh", {"refresh_token": self.session.get("refresh_token", "")}, use_auth=False)
+                    self.session.update(refreshed)
+                    self.session["expires_at"] = time.time() + int(refreshed.get("expires_in", 3600))
+                except Exception:
+                    self.session = None
+                    raise RuntimeError("Сессия истекла. Войди в аккаунт снова.")
+        url = API_AUTH + "?route=" + urllib.parse.quote(route, safe="/")
+        headers = {"User-Agent": "PrimeHub/1.0", "Accept": "application/json"}
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        if use_auth and self.session and self.session.get("access_token"):
+            headers["Authorization"] = "Bearer " + self.session["access_token"]
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8") if payload is not None else None, headers=headers, method="POST" if payload is not None else "GET")
+        try:
+            with urllib.request.urlopen(req, timeout=25) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+            detail = data.get("detail", {}) if isinstance(data, dict) else {}
+            raise RuntimeError(detail.get("message") or data.get("message") or ("Ошибка сервера: " + str(exc.code)))
+        try:
+            return json.loads(raw) if raw else {}
+        except Exception:
+            raise RuntimeError("Сервер вернул некорректный ответ.")
+
+    def update_account_button(self):
+        if not hasattr(self, "account_btn"):
+            return
+        user = (self.session or {}).get("user") or {}
+        label = user.get("username") or user.get("email") or ""
+        self.account_btn.configure(text=("● " + label) if label else "Войти / Регистрация")
+
+    def open_account(self):
+        if self.account_window and self.account_window.winfo_exists():
+            self.account_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        self.account_window = win
+        win.title("Аккаунт PrimeHub")
+        win.geometry("470x520")
+        win.resizable(False, False)
+        win.configure(bg=COLORS["bg"])
+        win.transient(self.root)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        self.account_body = tk.Frame(win, bg=COLORS["bg"])
+        self.account_body.pack(fill="both", expand=True, padx=28, pady=24)
+        self.show_account_profile() if self.session else self.show_auth_form("login")
+
+    def auth_heading(self, title, subtitle):
+        tk.Label(self.account_body, text=title, font=("Segoe UI",20,"bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(anchor="w")
+        tk.Label(self.account_body, text=subtitle, font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["bg"], wraplength=405, justify="left").pack(anchor="w", pady=(7,18))
+
+    def auth_field(self, label, secret=False, value=""):
+        tk.Label(self.account_body, text=label, font=("Segoe UI",9,"bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w", pady=(8,5))
+        entry = tk.Entry(self.account_body, font=("Segoe UI",11), bg=COLORS["panel"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", bd=0, show="●" if secret else "")
+        entry.pack(fill="x", ipady=10)
+        if value:
+            entry.insert(0, value)
+        return entry
+
+    def auth_button(self, label, command, secondary=False):
+        btn = tk.Button(self.account_body, text=label, command=command, bg=COLORS["panel2"] if secondary else COLORS["blue"], fg=COLORS["text"] if secondary else "white", activebackground=COLORS["line"] if secondary else COLORS["cyan"], activeforeground=COLORS["text"] if secondary else "#07101d", bd=0, font=("Segoe UI",9,"bold"), padx=14, pady=11, cursor="hand2")
+        btn.pack(fill="x", pady=(12,0))
+        return btn
+
+    def auth_switch(self, text, mode):
+        tk.Button(self.account_body, text=text, command=lambda:self.show_auth_form(mode), bg=COLORS["bg"], fg=COLORS["cyan"], activebackground=COLORS["bg"], activeforeground=COLORS["blue"], bd=0, font=("Segoe UI",9,"underline"), cursor="hand2").pack(pady=(12,0))
+
+    def show_auth_form(self, mode):
+        for child in self.account_body.winfo_children():
+            child.destroy()
+        if mode == "register":
+            self.auth_heading("Создать аккаунт", "Регистрация открыта для всех. Приглашение или специальный код не нужны.")
+            self.reg_username = self.auth_field("Имя игрока (3–20 символов)")
+            self.reg_email = self.auth_field("Электронная почта")
+            self.reg_password = self.auth_field("Пароль (не менее 8 символов)", True)
+            self.auth_button("Зарегистрироваться", self.submit_register)
+            self.auth_switch("Уже есть аккаунт? Войти", "login")
+        else:
+            self.auth_heading("Вход в PrimeHub", "Войди по имени игрока или адресу электронной почты.")
+            self.login_identifier = self.auth_field("Имя игрока или почта")
+            self.login_password = self.auth_field("Пароль", True)
+            self.auth_button("Войти", self.submit_login)
+            self.auth_switch("Создать новый аккаунт", "register")
+
+    def show_verify_form(self, email):
+        for child in self.account_body.winfo_children():
+            child.destroy()
+        self.auth_heading("Подтверждение почты", "Мы отправили одноразовый код на " + email + ". Введи код из письма, чтобы завершить регистрацию.")
+        self.verify_code = self.auth_field("Код из письма")
+        self.auth_button("Подтвердить и войти", self.submit_verify)
+        self.auth_button("Отправить код ещё раз", self.resend_code, secondary=True)
+        self.auth_switch("Назад ко входу", "login")
+
+    def accept_session(self, data):
+        self.session = dict(data)
+        self.session["expires_at"] = time.time() + int(data.get("expires_in", 3600))
+        self.update_account_button()
+        if self.account_window and self.account_window.winfo_exists():
+            self.account_window.destroy()
+        messagebox.showinfo("PrimeHub", "Ты вошёл в аккаунт " + str((data.get("user") or {}).get("username") or "") + ".", parent=self.root)
+
+    def submit_register(self):
+        username = self.reg_username.get().strip()
+        email = self.reg_email.get().strip()
+        password = self.reg_password.get()
+        if len(username) < 3 or len(username) > 20:
+            messagebox.showwarning("Регистрация", "Имя игрока должно содержать от 3 до 20 символов.", parent=self.account_window); return
+        if not email or len(password) < 8:
+            messagebox.showwarning("Регистрация", "Укажи почту и пароль не короче 8 символов.", parent=self.account_window); return
+        try:
+            result = self.auth_api("/api/auth/register", {"username": username, "email": email, "password": password}, use_auth=False)
+            self.pending_email = result.get("email") or email
+            self.show_verify_form(self.pending_email)
+        except Exception as exc:
+            messagebox.showerror("Регистрация", str(exc), parent=self.account_window)
+
+    def submit_verify(self):
+        code = self.verify_code.get().strip()
+        try:
+            result = self.auth_api("/api/auth/verify", {"email": self.pending_email, "code": code}, use_auth=False)
+            self.accept_session(result)
+        except Exception as exc:
+            messagebox.showerror("Подтверждение почты", str(exc), parent=self.account_window)
+
+    def resend_code(self):
+        try:
+            result = self.auth_api("/api/auth/resend", {"email": self.pending_email}, use_auth=False)
+            messagebox.showinfo("PrimeHub", result.get("message", "Если аккаунт ожидает подтверждения, новый код отправлен."), parent=self.account_window)
+        except Exception as exc:
+            messagebox.showerror("PrimeHub", str(exc), parent=self.account_window)
+
+    def submit_login(self):
+        identifier = self.login_identifier.get().strip()
+        password = self.login_password.get()
+        if not identifier or not password:
+            messagebox.showwarning("Вход", "Введи имя игрока/почту и пароль.", parent=self.account_window); return
+        try:
+            result = self.auth_api("/api/auth/login", {"identifier": identifier, "password": password}, use_auth=False)
+            self.accept_session(result)
+        except Exception as exc:
+            messagebox.showerror("Вход", str(exc), parent=self.account_window)
+
+    def show_account_profile(self):
+        for child in self.account_body.winfo_children():
+            child.destroy()
+        user = (self.session or {}).get("user") or {}
+        self.auth_heading("Твой аккаунт", "Аккаунт PrimeHub подключён.")
+        tk.Label(self.account_body, text=user.get("username") or "Игрок", font=("Segoe UI",15,"bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(anchor="w", pady=(8,3))
+        tk.Label(self.account_body, text=user.get("email") or "", font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w")
+        self.auth_button("Выйти из аккаунта", self.logout_account)
+        self.auth_button("Закрыть", self.account_window.destroy, secondary=True)
+
+    def logout_account(self):
+        try:
+            self.auth_api("/api/auth/logout", {}, use_auth=True)
+        except Exception:
+            pass
+        self.session = None
+        self.update_account_button()
+        self.account_window.destroy()
 
     def launch_game(self, game):
         base=self.installed_dir(game)
