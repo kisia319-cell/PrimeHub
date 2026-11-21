@@ -128,7 +128,7 @@ class PrimeHub:
     def refresh_cards(self):
         for w in self.cards.winfo_children(): w.destroy()
         if self.platform == "PC":
-            self.count_label.configure(text="2 игры")
+            self.count_label.configure(text="3 игры")
             sky_tag=self.releases.get("sky",{}).get("tag_name")
             sky_update=self.needs_update("SkyRealm",sky_tag)
             sky_installed=self.is_installed("SkyRealm")
@@ -137,6 +137,7 @@ class PrimeHub:
             prime_update=self.needs_update("PrimeLauncher",prime_tag)
             prime_installed=self.is_installed("PrimeLauncher")
             self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная игра PrimeLauncher. Она останется самостоятельной и будет запускаться через Hub.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
+            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows", "Отдельный режим выживания в мире после катастрофы. Сохранения Apocalypse не смешиваются с обычными мирами.", "#873f49", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_apocalypse()), sky_installed)
         else:
             self.count_label.configure(text="1 игра")
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
@@ -480,6 +481,20 @@ class PrimeHub:
         self.session = None
         self.update_account_button()
         self.account_window.destroy()
+
+    def launch_apocalypse(self):
+        base = self.installed_dir("SkyRealm")
+        candidates = [base / "SkyRealm.exe", base / "SkyRealm" / "SkyRealm.exe"]
+        exe = next((p for p in candidates if p.exists()), None)
+        if not exe:
+            messagebox.showinfo("Apocalypse", "Сначала установи SkyRealm через карточку Apocalypse.")
+            return
+        try:
+            env = os.environ.copy()
+            env["SKYREALM_GAME_MODE"] = "apocalypse"
+            subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
+        except Exception as exc:
+            messagebox.showerror("Apocalypse", "Не удалось запустить режим: " + str(exc))
 
     def launch_game(self, game):
         base=self.installed_dir(game)
