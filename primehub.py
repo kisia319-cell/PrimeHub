@@ -30,6 +30,12 @@ def _dpapi_transform(raw: bytes, protect: bool) -> bytes:
     target = _DATA_BLOB()
     crypt = ctypes.windll.crypt32
     kernel = ctypes.windll.kernel32
+    crypt.CryptProtectData.argtypes = [ctypes.POINTER(_DATA_BLOB), ctypes.c_wchar_p, ctypes.POINTER(_DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_DATA_BLOB)]
+    crypt.CryptProtectData.restype = ctypes.c_int
+    crypt.CryptUnprotectData.argtypes = [ctypes.POINTER(_DATA_BLOB), ctypes.POINTER(ctypes.c_wchar_p), ctypes.POINTER(_DATA_BLOB), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_DATA_BLOB)]
+    crypt.CryptUnprotectData.restype = ctypes.c_int
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
     if protect:
         ok = crypt.CryptProtectData(ctypes.byref(source), "PrimeHub auth session", None, None, None, 0x1, ctypes.byref(target))
     else:
