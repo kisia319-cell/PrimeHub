@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.0.8"
+APP_VERSION = "v1.0.9"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -137,8 +137,12 @@ class PrimeHub:
 
     def is_installed(self, game):
         p = self.installed_dir(game)
-        if game in ("SkyRealm", "Apocalypse"):
+        if game == "SkyRealm":
             return (p / "game" / "index.html").is_file() and (p / "runtime" / "SkyRealmGame.exe").is_file()
+        if game == "Apocalypse":
+            return ((p / "game" / "index.html").is_file()
+                    and (p / "game" / "APOCALYPSE_EDITION.json").is_file()
+                    and (p / "runtime" / "SkyRealmApocalypse.exe").is_file())
         if game == "PrimeLauncher":
             return (p / "PrimeLauncher.exe").exists()
         if game == "PrimeLauncher Mobile":
@@ -370,17 +374,29 @@ class PrimeHub:
     def _install_skyrealm_mode(self, game):
         rel = self.releases.get("sky") or self.fetch_json(API_SKY)
         self.releases["sky"] = rel
-        game_asset = self.find_asset(rel, "SkyRealm_Game.zip")
-        runtime_asset = self.find_asset(rel, "SkyRealm_Windows.zip")
+        if game == "Apocalypse":
+            game_asset_name = "SkyRealm_Apocalypse_Game.zip"
+            runtime_asset_name = "SkyRealm_Apocalypse_Windows.zip"
+            runner_name = "SkyRealmApocalypse.exe"
+        else:
+            game_asset_name = "SkyRealm_Game.zip"
+            runtime_asset_name = "SkyRealm_Windows.zip"
+            runner_name = "SkyRealmGame.exe"
+        game_asset = self.find_asset(rel, game_asset_name)
+        runtime_asset = self.find_asset(rel, runtime_asset_name)
         if not game_asset or not runtime_asset:
-            raise RuntimeError("В релизе не найдены SkyRealm_Game.zip и SkyRealm_Windows.zip.")
+            raise RuntimeError(
+                "В последнем релизе не найдены отдельные пакеты " +
+                game_asset_name + " и " + runtime_asset_name +
+                ". Проверь обновление PrimeHub и повтори попытку."
+            )
         safe_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", str(rel.get("tag_name") or "latest"))
         cache = ROOT / "cache"
-        game_archive = cache / ("SkyRealm_Game_" + safe_tag + ".zip")
-        runtime_archive = cache / ("SkyRealm_Windows_" + safe_tag + ".zip")
-        self.set_status("Скачиваем пакет " + game + "...")
+        game_archive = cache / (game + "_Game_" + safe_tag + ".zip")
+        runtime_archive = cache / (game + "_Windows_" + safe_tag + ".zip")
+        self.set_status("Скачиваем отдельное издание " + game + "...")
         self.download(game_asset["browser_download_url"], game_archive)
-        self.set_progress(0, "Загружаем игровой запускатель SkyRealm...")
+        self.set_progress(0, "Загружаем отдельный запускатель " + game + "...")
         self.download(runtime_asset["browser_download_url"], runtime_archive)
 
         staging_root = ROOT / "staging" / (game + "-install")
@@ -388,29 +404,43 @@ class PrimeHub:
             shutil.rmtree(staging_root, ignore_errors=True)
         game_dir = staging_root / "game"
         runtime_extract = staging_root / "runtime-extract"
-        self.set_progress(0, "Распаковываем отдельную копию " + game + "...")
+        self.set_progress(0, "Распаковываем независимую сборку " + game + "...")
         self._safe_extract_zip(game_archive, game_dir)
         self._safe_extract_zip(runtime_archive, runtime_extract)
-        runner_candidates = [p for p in runtime_extract.rglob("SkyRealmGame.exe") if p.is_file()]
+        runner_candidates = [p for p in runtime_extract.rglob(runner_name) if p.is_file()]
         if len(runner_candidates) != 1:
-            raise RuntimeError("В пакете нет отдельного игрового запускающего файла SkyRealmGame.exe. Обнови игровой пакет и повтори установку.")
+            raise RuntimeError("В пакете " + game + " не найден отдельный файл " + runner_name + ".")
         runtime_dir = staging_root / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        runner = runtime_dir / "SkyRealmGame.exe"
+        runner = runtime_dir / runner_name
         shutil.copy2(runner_candidates[0], runner)
         shutil.rmtree(runtime_extract, ignore_errors=True)
+
         index = game_dir / "index.html"
         script = game_dir / "game.js"
         version_file = game_dir / "version.txt"
         if not index.is_file() or not script.is_file() or not version_file.is_file():
-            raise RuntimeError("Архив игры неполный: отсутствует index.html, game.js или version.txt.")
+            raise RuntimeError("Архив " + game + " неполный: отсутствует index.html, game.js или version.txt.")
         if game == "Apocalypse":
+            marker = game_dir / "APOCALYPSE_EDITION.json"
+            if not marker.is_file():
+                raise RuntimeError("Это не отдельный пакет Apocalypse: отсутствует APOCALYPSE_EDITION.json.")
+            try:
+                edition = json.loads(marker.read_text(encoding="utf-8-sig"))
+            except Exception as exc:
+                raise RuntimeError("Маркер Apocalypse повреждён: " + str(exc))
             game_source = script.read_text(encoding="utf-8")
-            if "IS_APOCALYPSE_MODE" not in game_source or "skyrealm_apocalypse_worlds_v1" not in game_source:
-                raise RuntimeError("Пакет игры не содержит отдельный Apocalypse-режим. Обновление не установлено, прежняя версия сохранена.")
+            html_source = index.read_text(encoding="utf-8")
+            required_game = ("IS_APOCALYPSE_MODE", "apocalypseInfected", "drawApocalypseRuins", "skyrealm_apocalypse_worlds_v1")
+            required_html = ("apocalypse-intro-scene", "scene-apocalypse", "APOCALYPSE")
+            if (edition.get("edition") != "apocalypse" or edition.get("mode") != "apocalypse"
+                    or edition.get("launcher") != "SkyRealmApocalypse.exe"
+                    or any(token not in game_source for token in required_game)
+                    or any(token not in html_source for token in required_html)):
+                raise RuntimeError("В архиве нет полноценной сборки Apocalypse. Текущая установленная версия не изменена.")
         with runner.open("rb") as stream:
             if stream.read(2) != b"MZ" or runner.stat().st_size < 1_000_000:
-                raise RuntimeError("Игровой запускатель повреждён или не является Windows EXE.")
+                raise RuntimeError("Игровой запускатель " + runner_name + " повреждён или не является Windows EXE.")
         game_version = version_file.read_text(encoding="utf-8").strip()
         dest = self.installed_dir(game)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -431,10 +461,14 @@ class PrimeHub:
             raise
         if backup.exists():
             shutil.rmtree(backup, ignore_errors=True)
-        self.state[game] = {"version": rel.get("tag_name"), "game_version": game_version, "installed": int(time.time())}
+        self.state[game] = {
+            "version": rel.get("tag_name"), "game_version": game_version,
+            "edition": "apocalypse" if game == "Apocalypse" else "normal",
+            "installed": int(time.time())
+        }
         self.save_state()
         self.set_status(game + " установлен • " + game_version, COLORS["green"])
-        self.set_progress(100, game + " готов. Нажми «Запустить» в карточке.")
+        self.set_progress(100, game + " готов. Запускатель: " + runner_name)
 
     def _install_game(self, game):
         self.busy=True
@@ -720,7 +754,8 @@ class PrimeHub:
     def launch_game(self, game):
         if game in ("SkyRealm", "Apocalypse"):
             base = self.installed_dir(game)
-            exe = base / "runtime" / "SkyRealmGame.exe"
+            runner_name = "SkyRealmApocalypse.exe" if game == "Apocalypse" else "SkyRealmGame.exe"
+            exe = base / "runtime" / runner_name
             index = base / "game" / "index.html"
             if not exe.is_file() or not index.is_file():
                 messagebox.showinfo("PrimeHub", "Сначала установи " + game + " через соответствующую карточку.")
@@ -732,6 +767,16 @@ class PrimeHub:
                 else:
                     env.pop("SKYREALM_GAME_MODE", None)
                 mode = "apocalypse" if game == "Apocalypse" else "normal"
+                if game == "Apocalypse":
+                    marker = base / "game" / "APOCALYPSE_EDITION.json"
+                    try:
+                        edition = json.loads(marker.read_text(encoding="utf-8-sig"))
+                    except Exception:
+                        messagebox.showerror("Apocalypse", "Установка не является отдельной сборкой Apocalypse. Переустанови Apocalypse через Hub.")
+                        return
+                    if edition.get("edition") != "apocalypse" or edition.get("launcher") != runner_name:
+                        messagebox.showerror("Apocalypse", "Маркер издания не совпадает с отдельным запускателем. Переустанови Apocalypse.")
+                        return
                 flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
                 subprocess.Popen([str(exe), "--skyrealm-game", str(index), "--mode", mode],
                                  cwd=str(index.parent), env=env, close_fds=True, creationflags=flags)
