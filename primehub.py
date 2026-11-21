@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.1.1"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.0.0"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -259,8 +259,6 @@ class PrimeHub:
                 self.check_hub_update(hub)
             except Exception:
                 pass
-            if self.needs_update("SkyRealm",sky.get("tag_name")): auto_updates.append("SkyRealm")
-            if self.needs_update("PrimeLauncher",sky.get("tag_name")): auto_updates.append("PrimeLauncher")
             if self.needs_update("PrimeLauncher Mobile",mob.get("tag_name")): auto_updates.append("PrimeLauncher Mobile")
             if self.needs_update("Apocalypse",apocalypse_pc.get("tag_name")): auto_updates.append("Apocalypse")
             self.root.after(0,self.refresh_cards)
