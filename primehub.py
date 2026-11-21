@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.0.5"
+APP_VERSION = "v1.0.6"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -104,9 +104,12 @@ class PrimeHub:
 
     def is_installed(self, game):
         p = self.installed_dir(game)
-        if game == "SkyRealm": return (p / "SkyRealm.exe").exists() or (p / "SkyRealm" / "SkyRealm.exe").exists()
-        if game == "PrimeLauncher": return (p / "PrimeLauncher.exe").exists()
-        if game == "PrimeLauncher Mobile": return (p / "SkyRealm-Hub.apk").exists() or (p / "PrimeLauncher-Mobile.apk").exists()
+        if game in ("SkyRealm", "Apocalypse"):
+            return (p / "game" / "index.html").is_file() and (p / "runtime" / "SkyRealm.exe").is_file()
+        if game == "PrimeLauncher":
+            return (p / "PrimeLauncher.exe").exists()
+        if game == "PrimeLauncher Mobile":
+            return (p / "SkyRealm-Hub.apk").exists() or (p / "PrimeLauncher-Mobile.apk").exists()
         return False
 
     def card(self, parent, title, subtitle, version, description, accent, button_text, action, installed=False, available=True):
@@ -134,12 +137,13 @@ class PrimeHub:
             sky_tag=self.releases.get("sky",{}).get("tag_name")
             sky_update=self.needs_update("SkyRealm",sky_tag)
             sky_installed=self.is_installed("SkyRealm")
-            self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", "PC • Windows", "Открытый мир, приключения, боссы и развитие. Hub устанавливает игру в собственную папку.", "#285f83", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
-            prime_tag=self.releases.get("sky",{}).get("tag_name")
-            prime_update=self.needs_update("PrimeLauncher",prime_tag)
+            self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", "PC • Windows", "Обычный открытый мир SkyRealm. Устанавливается отдельно от Apocalypse.", "#285f83", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
+            prime_update=self.needs_update("PrimeLauncher",sky_tag)
             prime_installed=self.is_installed("PrimeLauncher")
-            self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная игра PrimeLauncher. Она останется самостоятельной и будет запускаться через Hub.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
-            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows", "Отдельный режим выживания в мире после катастрофы. Сохранения Apocalypse не смешиваются с обычными мирами.", "#873f49", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_apocalypse()), sky_installed)
+            self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная соревновательная игра PrimeLauncher.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
+            apoc_update=self.needs_update("Apocalypse",sky_tag)
+            apoc_installed=self.is_installed("Apocalypse")
+            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows", "Отдельная установка режима Apocalypse. Запускается сразу в режиме катастрофы и хранит отдельные миры.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
@@ -309,35 +313,98 @@ class PrimeHub:
         if self.busy: return
         threading.Thread(target=self._install_game,args=(game,),daemon=True).start()
 
+    def _safe_extract_zip(self, archive_path, destination):
+        root = destination.resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive_path, "r") as bundle:
+            for member in bundle.infolist():
+                name = member.filename.replace("\\", "/")
+                relative = Path(name)
+                if relative.is_absolute() or any(part in ("..", "") for part in relative.parts):
+                    raise RuntimeError("В архиве найден недопустимый путь: " + member.filename)
+                target = (root / relative).resolve()
+                if target != root and root not in target.parents:
+                    raise RuntimeError("Архив пытается записать файл за пределами папки установки.")
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise RuntimeError("В архиве обнаружена символическая ссылка: " + member.filename)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(member, "r") as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+
+    def _install_skyrealm_mode(self, game):
+        rel = self.releases.get("sky") or self.fetch_json(API_SKY)
+        self.releases["sky"] = rel
+        game_asset = self.find_asset(rel, "SkyRealm_Game.zip")
+        runtime_asset = self.find_asset(rel, "SkyRealm_Windows.zip")
+        if not game_asset or not runtime_asset:
+            raise RuntimeError("В релизе не найдены SkyRealm_Game.zip и SkyRealm_Windows.zip.")
+        safe_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", str(rel.get("tag_name") or "latest"))
+        cache = ROOT / "cache"
+        game_archive = cache / ("SkyRealm_Game_" + safe_tag + ".zip")
+        runtime_archive = cache / ("SkyRealm_Windows_" + safe_tag + ".zip")
+        self.set_status("Скачиваем пакет " + game + "...")
+        self.download(game_asset["browser_download_url"], game_archive)
+        self.set_progress(0, "Загружаем игровой запускатель SkyRealm...")
+        self.download(runtime_asset["browser_download_url"], runtime_archive)
+
+        staging_root = ROOT / "staging" / (game + "-install")
+        if staging_root.exists():
+            shutil.rmtree(staging_root, ignore_errors=True)
+        game_dir = staging_root / "game"
+        runtime_extract = staging_root / "runtime-extract"
+        self.set_progress(0, "Распаковываем отдельную копию " + game + "...")
+        self._safe_extract_zip(game_archive, game_dir)
+        self._safe_extract_zip(runtime_archive, runtime_extract)
+        runner_candidates = [p for p in runtime_extract.rglob("SkyRealm.exe") if p.is_file()]
+        if len(runner_candidates) != 1:
+            raise RuntimeError("В установочном пакете не найден единственный SkyRealm.exe.")
+        runtime_dir = staging_root / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        runner = runtime_dir / "SkyRealm.exe"
+        shutil.copy2(runner_candidates[0], runner)
+        shutil.rmtree(runtime_extract, ignore_errors=True)
+        index = game_dir / "index.html"
+        script = game_dir / "game.js"
+        version_file = game_dir / "version.txt"
+        if not index.is_file() or not script.is_file() or not version_file.is_file():
+            raise RuntimeError("Архив игры неполный: отсутствует index.html, game.js или version.txt.")
+        with runner.open("rb") as stream:
+            if stream.read(2) != b"MZ" or runner.stat().st_size < 1_000_000:
+                raise RuntimeError("Игровой запускатель повреждён или не является Windows EXE.")
+        game_version = version_file.read_text(encoding="utf-8").strip()
+        dest = self.installed_dir(game)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        backup_root = ROOT / "backups"
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup = backup_root / (game + ".previous")
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        moved_old = False
+        if dest.exists():
+            dest.rename(backup)
+            moved_old = True
+        try:
+            staging_root.rename(dest)
+        except Exception:
+            if moved_old and backup.exists() and not dest.exists():
+                backup.rename(dest)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        self.state[game] = {"version": rel.get("tag_name"), "game_version": game_version, "installed": int(time.time())}
+        self.save_state()
+        self.set_status(game + " установлен • " + game_version, COLORS["green"])
+        self.set_progress(100, game + " готов. Нажми «Запустить» в карточке.")
+
     def _install_game(self, game):
         self.busy=True
         try:
             GAMES.mkdir(parents=True,exist_ok=True)
-            if game=="SkyRealm":
-                rel=self.releases.get("sky") or self.fetch_json(API_SKY)
-                asset=self.find_asset(rel,"SkyRealm_Windows.zip")
-                if not asset: raise RuntimeError("В последнем релизе не найден SkyRealm_Windows.zip")
-                dest=self.installed_dir("SkyRealm")
-                archive=ROOT/"cache"/"SkyRealm_Windows.zip"
-                self.set_status("Устанавливаем SkyRealm...")
-                self.download(asset["browser_download_url"],archive)
-                self.set_progress(0,"Распаковка SkyRealm в "+str(dest))
-                tmp=ROOT/"staging"/"SkyRealm"
-                if tmp.exists(): shutil.rmtree(tmp)
-                tmp.mkdir(parents=True,exist_ok=True)
-                with zipfile.ZipFile(archive) as z: z.extractall(tmp)
-                if dest.exists(): shutil.rmtree(dest)
-                dest.mkdir(parents=True,exist_ok=True)
-                # Keep the release's directory structure intact.
-                for item in tmp.iterdir():
-                    target=dest/item.name
-                    if item.is_dir(): shutil.move(str(item),str(target))
-                    else: shutil.move(str(item),str(target))
-                shutil.rmtree(tmp,ignore_errors=True)
-                self.state["SkyRealm"]={"version":rel.get("tag_name"),"installed":int(time.time())}
-                self.save_state()
-                self.set_status("SkyRealm установлен",COLORS["green"])
-                self.set_progress(100,"SkyRealm готов. Нажми «Запустить» в карточке.")
+            if game in ("SkyRealm", "Apocalypse"):
+                self._install_skyrealm_mode(game)
             elif game=="PrimeLauncher":
                 rel=self.releases.get("sky") or self.fetch_json(API_SKY)
                 asset=self.find_asset(rel,"PrimeLauncher.exe")
@@ -347,10 +414,14 @@ class PrimeHub:
                 target=dest/"PrimeLauncher.exe"
                 self.set_status("Устанавливаем PrimeLauncher...")
                 self.download(asset["browser_download_url"],target)
+                with target.open("rb") as stream:
+                    if stream.read(2) != b"MZ" or target.stat().st_size < 1_000_000:
+                        target.unlink(missing_ok=True)
+                        raise RuntimeError("PrimeLauncher.exe скачан не полностью или повреждён.")
                 self.state["PrimeLauncher"]={"version":rel.get("tag_name"),"installed":int(time.time())}
                 self.save_state()
                 self.set_status("PrimeLauncher установлен",COLORS["green"])
-                self.set_progress(100,"PrimeLauncher установлен. Старый отдельный лаунчер не удалён.")
+                self.set_progress(100,"PrimeLauncher установлен.")
             else:
                 rel=self.releases.get("mobile") or self.fetch_json(API_PRIME_MOBILE)
                 asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
@@ -545,28 +616,36 @@ class PrimeHub:
         self.account_window.destroy()
 
     def launch_apocalypse(self):
-        base = self.installed_dir("SkyRealm")
-        candidates = [base / "SkyRealm.exe", base / "SkyRealm" / "SkyRealm.exe"]
-        exe = next((p for p in candidates if p.exists()), None)
-        if not exe:
-            messagebox.showinfo("Apocalypse", "Сначала установи SkyRealm через карточку Apocalypse.")
-            return
-        try:
-            env = os.environ.copy()
-            env["SKYREALM_GAME_MODE"] = "apocalypse"
-            subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
-        except Exception as exc:
-            messagebox.showerror("Apocalypse", "Не удалось запустить режим: " + str(exc))
+        self.launch_game("Apocalypse")
 
     def launch_game(self, game):
+        if game in ("SkyRealm", "Apocalypse"):
+            base = self.installed_dir(game)
+            exe = base / "runtime" / "SkyRealm.exe"
+            index = base / "game" / "index.html"
+            if not exe.is_file() or not index.is_file():
+                messagebox.showinfo("PrimeHub", "Сначала установи " + game + " через соответствующую карточку.")
+                return
+            try:
+                env = os.environ.copy()
+                if game == "Apocalypse":
+                    env["SKYREALM_GAME_MODE"] = "apocalypse"
+                else:
+                    env.pop("SKYREALM_GAME_MODE", None)
+                flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+                subprocess.Popen([str(exe), "--skyrealm-game", str(index)], cwd=str(index.parent),
+                                 env=env, close_fds=True, creationflags=flags)
+            except Exception as exc:
+                messagebox.showerror("Не удалось запустить " + game, str(exc))
+            return
         base=self.installed_dir(game)
-        candidates=[base/"SkyRealm.exe",base/"SkyRealm"/"SkyRealm.exe"] if game=="SkyRealm" else [base/"PrimeLauncher.exe"]
-        exe=next((p for p in candidates if p.exists()),None)
-        if not exe:
+        exe=base/"PrimeLauncher.exe"
+        if not exe.exists():
             messagebox.showinfo("PrimeHub","Игра ещё не установлена. Нажми «Установить».")
             return
         try: subprocess.Popen([str(exe)],cwd=str(exe.parent))
         except Exception as e: messagebox.showerror("Не удалось запустить",str(e))
+
 
 if __name__=="__main__":
     ROOT.mkdir(parents=True,exist_ok=True)
