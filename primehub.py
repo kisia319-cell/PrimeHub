@@ -4,12 +4,14 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.0.9"
+APP_VERSION = "v1.1.0"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.0.0"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
+API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/tags/" + APOCALYPSE_PC_VERSION
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
@@ -140,9 +142,8 @@ class PrimeHub:
         if game == "SkyRealm":
             return (p / "game" / "index.html").is_file() and (p / "runtime" / "SkyRealmGame.exe").is_file()
         if game == "Apocalypse":
-            return ((p / "game" / "index.html").is_file()
-                    and (p / "game" / "APOCALYPSE_EDITION.json").is_file()
-                    and (p / "runtime" / "SkyRealmApocalypse.exe").is_file())
+            exe = p / "SkyRealmApocalypse.exe"
+            return exe.is_file() and exe.stat().st_size >= 1_000_000
         if game == "PrimeLauncher":
             return (p / "PrimeLauncher.exe").exists()
         if game == "PrimeLauncher Mobile":
@@ -178,9 +179,10 @@ class PrimeHub:
             prime_update=self.needs_update("PrimeLauncher",sky_tag)
             prime_installed=self.is_installed("PrimeLauncher")
             self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная соревновательная игра PrimeLauncher.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
-            apoc_update=self.needs_update("Apocalypse",sky_tag)
+            apoc_tag=self.releases.get("apocalypse_pc",{}).get("tag_name") or APOCALYPSE_PC_VERSION
+            apoc_update=self.needs_update("Apocalypse",apoc_tag)
             apoc_installed=self.is_installed("Apocalypse")
-            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows", "Отдельная установка режима Apocalypse. Запускается сразу в режиме катастрофы и хранит отдельные миры.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
+            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows · mobile edition", "Та самая мобильная Apocalypse, перенесённая в отдельное Windows-приложение. Сохраняет свой мир отдельно от обычного SkyRealm.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
@@ -250,6 +252,8 @@ class PrimeHub:
             self.releases["sky"]=sky
             mob=self.fetch_json(API_PRIME_MOBILE)
             self.releases["mobile"]=mob
+            apocalypse_pc=self.fetch_json(API_APOCALYPSE_PC)
+            self.releases["apocalypse_pc"]=apocalypse_pc
             try:
                 hub=self.fetch_json(API_HUB)
                 self.check_hub_update(hub)
@@ -258,8 +262,9 @@ class PrimeHub:
             if self.needs_update("SkyRealm",sky.get("tag_name")): auto_updates.append("SkyRealm")
             if self.needs_update("PrimeLauncher",sky.get("tag_name")): auto_updates.append("PrimeLauncher")
             if self.needs_update("PrimeLauncher Mobile",mob.get("tag_name")): auto_updates.append("PrimeLauncher Mobile")
+            if self.needs_update("Apocalypse",apocalypse_pc.get("tag_name")): auto_updates.append("Apocalypse")
             self.root.after(0,self.refresh_cards)
-            self.set_status("Каталог обновлён • "+sky.get("tag_name","")+" / "+mob.get("tag_name",""),COLORS["green"])
+            self.set_status("Каталог обновлён • "+sky.get("tag_name","")+" / "+mob.get("tag_name","")+" / "+apocalypse_pc.get("tag_name",""),COLORS["green"])
             self.set_progress(0,"Проверка завершена. Установщики и игры сохраняются внутри папки PrimeHub.")
         except Exception as e:
             self.set_status("Нет соединения с сервером обновлений",COLORS["orange"])
@@ -470,12 +475,64 @@ class PrimeHub:
         self.set_status(game + " установлен • " + game_version, COLORS["green"])
         self.set_progress(100, game + " готов. Запускатель: " + runner_name)
 
+    def _install_apocalypse_pc(self):
+        rel = self.releases.get("apocalypse_pc") or self.fetch_json(API_APOCALYPSE_PC)
+        self.releases["apocalypse_pc"] = rel
+        tag = str(rel.get("tag_name") or APOCALYPSE_PC_VERSION)
+        asset = self.find_asset(rel, "SkyRealmApocalypse.exe")
+        if not asset:
+            raise RuntimeError("В отдельном релизе мобильной Apocalypse не найден SkyRealmApocalypse.exe.")
+        safe_tag = re.sub(r"[^A-Za-z0-9_.-]", "_", tag)
+        staging = ROOT / "staging" / ("Apocalypse-" + safe_tag)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        exe = staging / "SkyRealmApocalypse.exe"
+        self.set_status("Скачиваем мобильную Apocalypse для Windows...")
+        self.download(asset["browser_download_url"], exe)
+        if not exe.is_file() or exe.stat().st_size < 1_000_000:
+            raise RuntimeError("SkyRealmApocalypse.exe скачался не полностью.")
+        with exe.open("rb") as stream:
+            if stream.read(2) != b"MZ":
+                raise RuntimeError("Файл мобильной Apocalypse повреждён: это не Windows EXE.")
+        (staging / "edition.json").write_text(
+            json.dumps({"edition": "apocalypse-mobile", "version": tag}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        dest = self.installed_dir("Apocalypse")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        backup = ROOT / "backups" / "Apocalypse.previous"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        moved_old = False
+        if dest.exists():
+            dest.rename(backup)
+            moved_old = True
+        try:
+            staging.rename(dest)
+        except Exception:
+            if moved_old and backup.exists() and not dest.exists():
+                backup.rename(dest)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        self.state["Apocalypse"] = {
+            "version": tag, "game_version": "mobile-apocalypse",
+            "edition": "apocalypse-mobile", "installed": int(time.time())
+        }
+        self.save_state()
+        self.set_status("Мобильная Apocalypse установлена • " + tag, COLORS["green"])
+        self.set_progress(100, "Готово. Установлен самостоятельный SkyRealmApocalypse.exe.")
+
     def _install_game(self, game):
         self.busy=True
         try:
             GAMES.mkdir(parents=True,exist_ok=True)
-            if game in ("SkyRealm", "Apocalypse"):
+            if game == "SkyRealm":
                 self._install_skyrealm_mode(game)
+            elif game == "Apocalypse":
+                self._install_apocalypse_pc()
             elif game=="PrimeLauncher":
                 rel=self.releases.get("sky") or self.fetch_json(API_SKY)
                 asset=self.find_asset(rel,"PrimeLauncher.exe")
@@ -752,7 +809,19 @@ class PrimeHub:
         self.launch_game("Apocalypse")
 
     def launch_game(self, game):
-        if game in ("SkyRealm", "Apocalypse"):
+        if game == "Apocalypse":
+            base = self.installed_dir("Apocalypse")
+            exe = base / "SkyRealmApocalypse.exe"
+            if not exe.is_file():
+                messagebox.showerror("PrimeHub", "Мобильная Apocalypse для Windows не установлена. Нажми «УСТАНОВИТЬ» на карточке игры.")
+                return
+            try:
+                subprocess.Popen([str(exe)], cwd=str(base))
+                self.set_status("Запущена мобильная Apocalypse для Windows", COLORS["green"])
+            except Exception as exc:
+                messagebox.showerror("PrimeHub", "Не удалось запустить Apocalypse: " + str(exc))
+            return
+        if game == "SkyRealm":
             base = self.installed_dir(game)
             runner_name = "SkyRealmApocalypse.exe" if game == "Apocalypse" else "SkyRealmGame.exe"
             exe = base / "runtime" / runner_name
