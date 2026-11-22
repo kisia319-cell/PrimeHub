@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.2"
+APP_VERSION = "v1.2.3"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.1.1"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -951,6 +951,10 @@ class PrimeHub:
         user = self.session.get("user") or {}
         access_token = self.session.get("access_token") or ""
         if access_token:
+            # SkyRealm and PrimeLauncher already consume this short-lived bearer
+            # through their native WebView bridge. Apocalypse PC also receives the
+            # structured session below for its co-op sign-in.
+            env["SKYREALM_SESSION_TOKEN"] = access_token
             env["SKYREALM_PRIMEHUB_SESSION"] = json.dumps(
                 {"access_token": access_token, "user": user}, ensure_ascii=False
             )
