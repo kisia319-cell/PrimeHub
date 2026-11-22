@@ -4,8 +4,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.3"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.1.1"
+APP_VERSION = "v1.2.4"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.2.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -318,20 +318,51 @@ class PrimeHub:
                 ],
             }
 
-        # Fallback to the public releases page when the REST API is unavailable.
-        page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc"
-        request = urllib.request.Request(
-            page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2"}
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            page = response.read().decode("utf-8", errors="replace")
-        tags = set(re.findall(
-            r'href="/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)"',
-            page,
-            re.I,
-        ))
+        # Fallback 1: GitHub's public Atom feed. It exposes release tags without
+        # depending on the changing HTML markup of the releases listing.
+        tags = set()
+        feed_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom"
+        try:
+            feed_request = urllib.request.Request(
+                feed_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2", "Accept": "application/atom+xml"}
+            )
+            with urllib.request.urlopen(feed_request, timeout=25) as response:
+                feed = response.read().decode("utf-8", errors="replace")
+            tags.update(re.findall(
+                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                html.unescape(feed),
+                re.I,
+            ))
+        except Exception:
+            pass
+
+        # Fallback 2: releases page. Accept relative and absolute hrefs because
+        # GitHub changes the markup between desktop and cached responses.
         if not tags:
-            raise RuntimeError("Не удалось найти опубликованный релиз Apocalypse для Windows.")
+            page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc"
+            request = urllib.request.Request(
+                page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2"}
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                page = response.read().decode("utf-8", errors="replace")
+            page = html.unescape(page)
+            tags.update(re.findall(
+                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                page,
+                re.I,
+            ))
+            # Some GitHub responses HTML-escape slashes or include a URL prefix
+            # in embedded JSON rather than a plain href attribute.
+            tags.update(re.findall(
+                r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                page,
+                re.I,
+            ))
+        if not tags:
+            raise RuntimeError(
+                "GitHub не вернул список Windows-релизов Apocalypse. "
+                "Проверь подключение к github.com и повтори проверку."
+            )
 
         # A matching tag is not enough: some Apocalypse prereleases/metadata
         # entries do not contain the Windows executable. Try newest tags first
