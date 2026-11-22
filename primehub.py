@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.1"
+APP_VERSION = "v1.2.2"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.1.1"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -820,8 +820,9 @@ class PrimeHub:
 
     def auth_field(self, label, secret=False, value=""):
         tk.Label(self.account_body, text=label, font=("Segoe UI",9,"bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w", pady=(8,5))
-        entry = tk.Entry(self.account_body, font=("Segoe UI",11), bg=COLORS["panel"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", bd=0, show="●" if secret else "")
+        entry = tk.Entry(self.account_body, width=48, takefocus=True, exportselection=False, font=("Segoe UI",11), bg=COLORS["panel"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", bd=0, show="●" if secret else "")
         entry.pack(fill="x", ipady=10)
+        entry.configure(state="normal", justify="left")
         if value:
             entry.insert(0, value)
         return entry
@@ -842,12 +843,14 @@ class PrimeHub:
             self.reg_username = self.auth_field("Имя игрока (3–20 символов)")
             self.reg_email = self.auth_field("Электронная почта")
             self.reg_password = self.auth_field("Пароль (не менее 8 символов)", True)
+            self.account_window.after_idle(self.reg_username.focus_set)
             self.auth_button("Зарегистрироваться", self.submit_register)
             self.auth_switch("Уже есть аккаунт? Войти", "login")
         else:
             self.auth_heading("Вход в PrimeHub", "Войди по имени игрока или адресу электронной почты.")
             self.login_identifier = self.auth_field("Имя игрока или почта")
             self.login_password = self.auth_field("Пароль", True)
+            self.account_window.after_idle(self.login_identifier.focus_set)
             self.auth_button("Войти", self.submit_login)
             self.auth_switch("Создать новый аккаунт", "register")
 
@@ -930,6 +933,29 @@ class PrimeHub:
         self.update_account_button()
         self.account_window.destroy()
 
+    def game_auth_environment(self):
+        """Pass the active PrimeHub account to child games without writing access tokens to disk."""
+        env = os.environ.copy()
+        if not self.session:
+            return env
+        if self.session.get("expires_at", 0) <= time.time() + 90:
+            try:
+                refreshed = self.auth_api("/api/auth/refresh", {"refresh_token": self.session.get("refresh_token", "")}, use_auth=False)
+                self.session.update(refreshed)
+                self.session["expires_at"] = time.time() + int(refreshed.get("expires_in", 3600))
+                self.save_auth_session()
+            except Exception:
+                self.session = None
+                self.update_account_button()
+                return env
+        user = self.session.get("user") or {}
+        access_token = self.session.get("access_token") or ""
+        if access_token:
+            env["SKYREALM_PRIMEHUB_SESSION"] = json.dumps(
+                {"access_token": access_token, "user": user}, ensure_ascii=False
+            )
+        return env
+
     def launch_apocalypse(self):
         self.launch_game("Apocalypse")
 
@@ -941,8 +967,10 @@ class PrimeHub:
                 messagebox.showerror("PrimeHub", "Мобильная Apocalypse для Windows не установлена. Нажми «УСТАНОВИТЬ» на карточке игры.")
                 return
             try:
-                subprocess.Popen([str(exe)], cwd=str(base))
-                self.set_status("Запущена мобильная Apocalypse для Windows", COLORS["green"])
+                env = self.game_auth_environment()
+                subprocess.Popen([str(exe)], cwd=str(base), env=env)
+                account_state = "с аккаунтом PrimeHub" if env.get("SKYREALM_PRIMEHUB_SESSION") else "без входа в PrimeHub"
+                self.set_status("Apocalypse запущена " + account_state, COLORS["green"])
             except Exception as exc:
                 messagebox.showerror("PrimeHub", "Не удалось запустить Apocalypse: " + str(exc))
             return
@@ -955,7 +983,7 @@ class PrimeHub:
                 messagebox.showinfo("PrimeHub", "Сначала установи " + game + " через соответствующую карточку.")
                 return
             try:
-                env = os.environ.copy()
+                env = self.game_auth_environment()
                 if game == "Apocalypse":
                     env["SKYREALM_GAME_MODE"] = "apocalypse"
                 else:
@@ -982,7 +1010,7 @@ class PrimeHub:
         if not exe.exists():
             messagebox.showinfo("PrimeHub","Игра ещё не установлена. Нажми «Установить».")
             return
-        try: subprocess.Popen([str(exe)],cwd=str(exe.parent))
+        try: subprocess.Popen([str(exe)],cwd=str(exe.parent),env=self.game_auth_environment())
         except Exception as e: messagebox.showerror("Не удалось запустить",str(e))
 
 
