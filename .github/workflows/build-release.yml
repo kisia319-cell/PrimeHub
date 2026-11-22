@@ -27,7 +27,7 @@ jobs:
         shell: pwsh
         run: |
           $source = Get-Content primehub.py -Raw
-          if ($source -match 'APP_VERSION\\s*=\\s*"([^"]+)"') {
+          if ($source -match 'APP_VERSION\s*=\s*"([^"]+)"') {
             "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
           } else {
             throw "APP_VERSION was not found in primehub.py"
