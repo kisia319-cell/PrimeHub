@@ -267,7 +267,7 @@ class PrimeHub:
         if matching:
             release = max(
                 matching,
-                key=lambda item: tuple(int(part) for part in re.findall(r"\\d+", str(item.get("tag_name", ""))))
+                key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
             )
             return {
                 "tag_name": release.get("tag_name", ""),
@@ -300,7 +300,7 @@ class PrimeHub:
 
         latest_tag = max(
             tags,
-            key=lambda tag: tuple(int(part) for part in re.findall(r"\\d+", tag))
+            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag))
         )
         return self.fetch_json(
             "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
