@@ -843,14 +843,14 @@ class PrimeHub:
             self.reg_username = self.auth_field("Имя игрока (3–20 символов)")
             self.reg_email = self.auth_field("Электронная почта")
             self.reg_password = self.auth_field("Пароль (не менее 8 символов)", True)
-            self.account_window.after(120, self.reg_username.focus_force)
+            self.account_window.after_idle(self.reg_username.focus_set)
             self.auth_button("Зарегистрироваться", self.submit_register)
             self.auth_switch("Уже есть аккаунт? Войти", "login")
         else:
             self.auth_heading("Вход в PrimeHub", "Войди по имени игрока или адресу электронной почты.")
             self.login_identifier = self.auth_field("Имя игрока или почта")
             self.login_password = self.auth_field("Пароль", True)
-            self.account_window.after(120, self.login_identifier.focus_force)
+            self.account_window.after_idle(self.login_identifier.focus_set)
             self.auth_button("Войти", self.submit_login)
             self.auth_switch("Создать новый аккаунт", "register")
 
