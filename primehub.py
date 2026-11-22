@@ -1,11 +1,11 @@
-import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html, ctypes
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html, ctypes, hashlib
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.0"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.0.8"
+APP_VERSION = "v1.2.1"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.1.1"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -135,7 +135,36 @@ class PrimeHub:
         return GAMES / game
 
     def needs_update(self, game, tag):
-        return self.is_installed(game) and bool(tag) and self.state.get(game,{}).get("version") != tag
+        if not self.is_installed(game) or not tag:
+            return False
+        installed = self.state.get(game, {})
+        if installed.get("version") != tag:
+            return True
+        # The old Hub trusted only the saved release tag. If a stale or partial EXE
+        # was recorded under the current tag, the card incorrectly showed Launch.
+        # Compare the actual Apocalypse binary against GitHub's published SHA-256.
+        if game == "Apocalypse":
+            exe = self.installed_dir("Apocalypse") / "SkyRealmApocalypse.exe"
+            if not exe.is_file():
+                return True
+            release = self.releases.get("apocalypse_pc") or {}
+            asset = self.find_asset(release, "SkyRealmApocalypse.exe")
+            if asset:
+                digest = str(asset.get("digest") or "").lower()
+                if digest.startswith("sha256:"):
+                    digest = digest.split(":", 1)[1]
+                    actual = hashlib.sha256()
+                    with exe.open("rb") as stream:
+                        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                            actual.update(chunk)
+                    return actual.hexdigest().lower() != digest
+                try:
+                    expected_size = int(asset.get("size") or 0)
+                    if expected_size:
+                        return exe.stat().st_size != expected_size
+                except (TypeError, ValueError, OSError):
+                    pass
+        return False
 
     def is_installed(self, game):
         p = self.installed_dir(game)
@@ -278,6 +307,8 @@ class PrimeHub:
                         "browser_download_url": asset.get("browser_download_url", ""),
                         "updated_at": asset.get("updated_at"),
                         "id": asset.get("id"),
+                        "digest": asset.get("digest"),
+                        "size": asset.get("size"),
                     }
                     for asset in release.get("assets", [])
                 ],
@@ -570,6 +601,13 @@ class PrimeHub:
         with exe.open("rb") as stream:
             if stream.read(2) != b"MZ":
                 raise RuntimeError("Файл мобильной Apocalypse повреждён: это не Windows EXE.")
+        expected_digest = str(asset.get("digest") or "").lower()
+        installed_digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+        if expected_digest.startswith("sha256:") and installed_digest != expected_digest.split(":", 1)[1]:
+            raise RuntimeError("SHA-256 Apocalypse не совпадает с опубликованным релизом. Старая версия сохранена.")
+        expected_size = int(asset.get("size") or 0)
+        if expected_size and exe.stat().st_size != expected_size:
+            raise RuntimeError("Размер Apocalypse не совпадает с опубликованным релизом. Старая версия сохранена.")
         (staging / "edition.json").write_text(
             json.dumps({"edition": "apocalypse-mobile", "version": tag}, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -594,7 +632,8 @@ class PrimeHub:
             shutil.rmtree(backup, ignore_errors=True)
         self.state["Apocalypse"] = {
             "version": tag, "game_version": "mobile-apocalypse",
-            "edition": "apocalypse-mobile", "installed": int(time.time())
+            "edition": "apocalypse-mobile", "sha256": installed_digest,
+            "installed": int(time.time())
         }
         self.save_state()
         self.set_status("Мобильная Apocalypse установлена • " + tag, COLORS["green"])
