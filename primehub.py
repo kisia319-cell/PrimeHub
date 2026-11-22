@@ -329,7 +329,7 @@ class PrimeHub:
             with urllib.request.urlopen(feed_request, timeout=25) as response:
                 feed = response.read().decode("utf-8", errors="replace")
             tags.update(re.findall(
-                r'(?:https?://github\\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
                 html.unescape(feed),
                 re.I,
             ))
@@ -347,7 +347,7 @@ class PrimeHub:
                 page = response.read().decode("utf-8", errors="replace")
             page = html.unescape(page)
             tags.update(re.findall(
-                r'(?:https?://github\\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
                 page,
                 re.I,
             ))
