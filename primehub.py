@@ -211,7 +211,7 @@ class PrimeHub:
             apoc_tag=self.releases.get("apocalypse_pc",{}).get("tag_name") or APOCALYPSE_PC_VERSION
             apoc_update=self.needs_update("Apocalypse",apoc_tag)
             apoc_installed=self.is_installed("Apocalypse")
-            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "PC • Windows · mobile edition", "Та самая мобильная Apocalypse, перенесённая в отдельное Windows-приложение. Сохраняет свой мир отдельно от обычного SkyRealm.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
+            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "Windows • " + apoc_tag, "Отдельная Windows-сборка Apocalypse. PrimeHub проверяет её релиз независимо от обычного SkyRealm; при новой версии появится кнопка «ОБНОВИТЬ».", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
@@ -292,6 +292,10 @@ class PrimeHub:
             item for item in (releases or [])
             if str(item.get("tag_name", "")).startswith("apocalypse-pc-v")
             and not item.get("draft", False)
+            and any(
+                str(asset.get("name", "")).lower() == "skyrealmapocalypse.exe"
+                for asset in (item.get("assets") or [])
+            )
         ]
         if matching:
             release = max(
@@ -329,13 +333,23 @@ class PrimeHub:
         if not tags:
             raise RuntimeError("Не удалось найти опубликованный релиз Apocalypse для Windows.")
 
-        latest_tag = max(
+        # A matching tag is not enough: some Apocalypse prereleases/metadata
+        # entries do not contain the Windows executable. Try newest tags first
+        # and select only a release that actually publishes the required EXE.
+        ordered_tags = sorted(
             tags,
-            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag))
+            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag)),
+            reverse=True,
         )
-        return self.fetch_json(
-            "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
-            + urllib.parse.quote(latest_tag, safe="")
+        for candidate_tag in ordered_tags:
+            release = self.fetch_json(
+                "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
+                + urllib.parse.quote(candidate_tag, safe="")
+            )
+            if self.find_asset(release, "SkyRealmApocalypse.exe"):
+                return release
+        raise RuntimeError(
+            "Найдены версии Apocalypse, но ни в одной не опубликован SkyRealmApocalypse.exe."
         )
 
     def check_updates_async(self):
@@ -358,10 +372,9 @@ class PrimeHub:
                 self.check_hub_update(hub)
             except Exception:
                 pass
-            if self.needs_update("SkyRealm",sky.get("tag_name")): auto_updates.append("SkyRealm")
-            if self.needs_update("PrimeLauncher",sky.get("tag_name")): auto_updates.append("PrimeLauncher")
-            if self.needs_update("PrimeLauncher Mobile",mob.get("tag_name")): auto_updates.append("PrimeLauncher Mobile")
-            if self.needs_update("Apocalypse",apocalypse_pc.get("tag_name")): auto_updates.append("Apocalypse")
+            # Updates are user-triggered from each game card. Never start a
+            # background install immediately after a check; keep the Update
+            # button visible so the player can choose when Apocalypse is replaced.
             self.root.after(0,self.refresh_cards)
             self.set_status("Каталог обновлён • "+sky.get("tag_name","")+" / "+mob.get("tag_name","")+" / "+apocalypse_pc.get("tag_name",""),COLORS["green"])
             self.set_progress(0,"Проверка завершена. Установщики и игры сохраняются внутри папки PrimeHub.")
@@ -370,8 +383,6 @@ class PrimeHub:
             self.set_progress(0,"Не удалось проверить обновления: "+str(e))
         finally:
             self.busy=False
-            if auto_updates:
-                self.root.after(1800, lambda games=list(auto_updates): threading.Thread(target=self._install_updates_sequential, args=(games,), daemon=True).start())
 
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
