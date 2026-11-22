@@ -22,11 +22,21 @@ jobs:
         run: python -m pip install --upgrade pyinstaller
       - name: Build Windows executable
         run: pyinstaller --noconfirm --clean --onefile --windowed --collect-all tkinter --name PrimeHub primehub.py
+      - name: Read PrimeHub version
+        id: version
+        shell: pwsh
+        run: |
+          $source = Get-Content primehub.py -Raw
+          if ($source -match 'APP_VERSION\\s*=\\s*"([^"]+)"') {
+            "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          } else {
+            throw "APP_VERSION was not found in primehub.py"
+          }
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.9
-          name: PrimeHub v1.1.9
+          tag_name: ${{ steps.version.outputs.version }}
+          name: PrimeHub ${{ steps.version.outputs.version }}
           target_commitish: main
           generate_release_notes: true
           draft: false
