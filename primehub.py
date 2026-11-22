@@ -4,14 +4,14 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.1.9"
+APP_VERSION = "v1.2.0"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.0.8"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
-API_APOCALYPSE_PC = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/" + APOCALYPSE_PC_VERSION
+API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
@@ -248,6 +248,65 @@ class PrimeHub:
         with urllib.request.urlopen(req, timeout=25) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def fetch_latest_apocalypse_release(self):
+        """Resolve the newest Windows Apocalypse release, not a permanently pinned tag."""
+        releases = None
+        try:
+            response = self.fetch_json(API_APOCALYPSE_PC)
+            if isinstance(response, list):
+                releases = response
+        except Exception:
+            # GitHub REST can be rate-limited on shared/regional networks.
+            releases = None
+
+        matching = [
+            item for item in (releases or [])
+            if str(item.get("tag_name", "")).startswith("apocalypse-pc-v")
+            and not item.get("draft", False)
+        ]
+        if matching:
+            release = max(
+                matching,
+                key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
+            )
+            return {
+                "tag_name": release.get("tag_name", ""),
+                "html_url": release.get("html_url", ""),
+                "assets": [
+                    {
+                        "name": asset.get("name", ""),
+                        "browser_download_url": asset.get("browser_download_url", ""),
+                        "updated_at": asset.get("updated_at"),
+                        "id": asset.get("id"),
+                    }
+                    for asset in release.get("assets", [])
+                ],
+            }
+
+        # Fallback to the public releases page when the REST API is unavailable.
+        page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc"
+        request = urllib.request.Request(
+            page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2"}
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            page = response.read().decode("utf-8", errors="replace")
+        tags = set(re.findall(
+            r'href="/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)"',
+            page,
+            re.I,
+        ))
+        if not tags:
+            raise RuntimeError("Не удалось найти опубликованный релиз Apocalypse для Windows.")
+
+        latest_tag = max(
+            tags,
+            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag))
+        )
+        return self.fetch_json(
+            "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
+            + urllib.parse.quote(latest_tag, safe="")
+        )
+
     def check_updates_async(self):
         if self.busy: return
         threading.Thread(target=self.check_updates,daemon=True).start()
@@ -261,7 +320,7 @@ class PrimeHub:
             self.releases["sky"]=sky
             mob=self.fetch_json(API_PRIME_MOBILE)
             self.releases["mobile"]=mob
-            apocalypse_pc=self.fetch_json(API_APOCALYPSE_PC)
+            apocalypse_pc=self.fetch_latest_apocalypse_release()
             self.releases["apocalypse_pc"]=apocalypse_pc
             try:
                 hub=self.fetch_json(API_HUB)
@@ -281,7 +340,7 @@ class PrimeHub:
         finally:
             self.busy=False
             if auto_updates:
-                self.root.after(1800,lambda:self.install_game(auto_updates[0]))
+                self.root.after(1800, lambda games=list(auto_updates): threading.Thread(target=self._install_updates_sequential, args=(games,), daemon=True).start())
 
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
@@ -363,6 +422,13 @@ class PrimeHub:
     def install_game(self, game):
         if self.busy: return
         threading.Thread(target=self._install_game,args=(game,),daemon=True).start()
+
+    def _install_updates_sequential(self, games):
+        """Install every detected update one by one so the shared busy flag stays safe."""
+        for game in games:
+            while self.busy:
+                time.sleep(0.25)
+            self._install_game(game)
 
     def _safe_extract_zip(self, archive_path, destination):
         root = destination.resolve()
@@ -485,7 +551,7 @@ class PrimeHub:
         self.set_progress(100, game + " готов. Запускатель: " + runner_name)
 
     def _install_apocalypse_pc(self):
-        rel = self.releases.get("apocalypse_pc") or self.fetch_json(API_APOCALYPSE_PC)
+        rel = self.releases.get("apocalypse_pc") or self.fetch_latest_apocalypse_release()
         self.releases["apocalypse_pc"] = rel
         tag = str(rel.get("tag_name") or APOCALYPSE_PC_VERSION)
         asset = self.find_asset(rel, "SkyRealmApocalypse.exe")
