@@ -4,8 +4,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.6"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.0"
+APP_VERSION = "v1.2.7"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.1"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
