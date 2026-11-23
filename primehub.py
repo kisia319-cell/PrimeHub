@@ -1233,9 +1233,28 @@ class PrimeHub:
         self.update_account_button()
         self.account_window.destroy()
 
+    def save_apocalypse_settings(self, settings=None):
+        value = self.get_apocalypse_settings() if settings is None else dict(settings)
+        self.state["apocalypse_settings"] = value
+        ROOT.mkdir(parents=True, exist_ok=True)
+        temp = APOCALYPSE_CONFIG.with_suffix(".tmp")
+        temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, APOCALYPSE_CONFIG)
+        self.save_state()
+        return value
+
+    def close_hub_after_launch(self):
+        if self.get_launcher_settings().get("close_hub_after_launch", False):
+            self.root.after(450, self.root.destroy)
+
     def game_auth_environment(self):
         """Pass the active PrimeHub account to child games without writing access tokens to disk."""
         env = os.environ.copy()
+        try:
+            settings = self.save_apocalypse_settings(self.get_apocalypse_settings())
+            env["SKYREALM_APOCALYPSE_SETTINGS_JSON"] = json.dumps(settings, ensure_ascii=False)
+        except Exception as exc:
+            self.set_status("Настройки Apocalypse не сохранены: " + str(exc), COLORS["orange"])
         if not self.session:
             return env
         if self.session.get("expires_at", 0) <= time.time() + 90:
@@ -1275,6 +1294,7 @@ class PrimeHub:
                 subprocess.Popen([str(exe)], cwd=str(base), env=env)
                 account_state = "с аккаунтом PrimeHub" if env.get("SKYREALM_PRIMEHUB_SESSION") else "без входа в PrimeHub"
                 self.set_status("Apocalypse запущена " + account_state, COLORS["green"])
+                self.close_hub_after_launch()
             except Exception as exc:
                 messagebox.showerror("PrimeHub", "Не удалось запустить Apocalypse: " + str(exc))
             return
@@ -1306,6 +1326,7 @@ class PrimeHub:
                 flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
                 subprocess.Popen([str(exe), "--skyrealm-game", str(index), "--mode", mode],
                                  cwd=str(index.parent), env=env, close_fds=True, creationflags=flags)
+                self.close_hub_after_launch()
             except Exception as exc:
                 messagebox.showerror("Не удалось запустить " + game, str(exc))
             return
@@ -1314,8 +1335,11 @@ class PrimeHub:
         if not exe.exists():
             messagebox.showinfo("PrimeHub","Игра ещё не установлена. Нажми «Установить».")
             return
-        try: subprocess.Popen([str(exe)],cwd=str(exe.parent),env=self.game_auth_environment())
-        except Exception as e: messagebox.showerror("Не удалось запустить",str(e))
+        try:
+            subprocess.Popen([str(exe)], cwd=str(exe.parent), env=self.game_auth_environment())
+            self.close_hub_after_launch()
+        except Exception as e:
+            messagebox.showerror("Не удалось запустить", str(e))
 
 
 if __name__=="__main__":
