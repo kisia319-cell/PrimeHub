@@ -69,7 +69,10 @@ class PrimeHub:
         self.build_ui()
         self.refresh_cards()
         self.root.after(250, self.restore_auth_session_async)
-        self.root.after(700, self.check_updates_async)
+        if self.get_launcher_settings().get('check_updates_on_start', True):
+            self.root.after(700, self.check_updates_async)
+        else:
+            self.set_status('Автоматическая проверка отключена настройками', COLORS['muted'])
 
     def load_state(self):
         try: return json.loads(DATA.read_text("utf-8"))
@@ -360,7 +363,6 @@ class PrimeHub:
                 APOCALYPSE_CONFIG.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
             self.save_state()
             self._render_settings(active_tab)
-            status.configure(text="Настройки сброшены.", fg=COLORS["green"])
 
         save_btn = tk.Button(actions, text="СОХРАНИТЬ", command=save_page, bg=COLORS["blue"], fg="white", activebackground=COLORS["cyan"], activeforeground="#07101d", bd=0, padx=17, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
         save_btn.pack(side="right", padx=(8, 0))
@@ -380,12 +382,6 @@ class PrimeHub:
                 pass
         self.refresh_cards()
 
-    def set_platform(self, platform):
-        self.platform = platform
-        for b,p in ((self.pc_btn,"PC"),(self.android_btn,"Android")):
-            active = p == platform
-            b.configure(bg=COLORS["blue"] if active else COLORS["panel"], fg="white" if active else COLORS["muted"])
-        self.refresh_cards()
 
     def installed_dir(self, game):
         return GAMES / game
