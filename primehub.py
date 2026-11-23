@@ -4,12 +4,13 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.4"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.2.5"
+APP_VERSION = "v1.2.5"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.3.0"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
+APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
@@ -82,47 +83,302 @@ class PrimeHub:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure("Hub.Horizontal.TProgressbar", troughcolor=COLORS["panel2"], background=COLORS["blue"], bordercolor=COLORS["panel2"], lightcolor=COLORS["blue"], darkcolor=COLORS["blue"])
-        header = tk.Frame(self.root, bg=COLORS["bg"])
-        header.pack(fill="x", padx=34, pady=(25,12))
-        brand = tk.Frame(header, bg=COLORS["bg"])
-        brand.pack(side="left")
-        tk.Label(brand, text="PRIME", font=("Segoe UI", 24, "bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(side="left")
-        tk.Label(brand, text="HUB", font=("Segoe UI", 24, "bold"), fg=COLORS["blue"], bg=COLORS["bg"]).pack(side="left", padx=(7,0))
-        tk.Label(brand, text="  GAME CENTER", font=("Segoe UI", 9, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left", padx=(12,0), pady=(10,0))
+
+        shell = tk.Frame(self.root, bg=COLORS["bg"])
+        shell.pack(fill="both", expand=True)
+        self.sidebar = tk.Frame(shell, bg=COLORS["panel"], width=214, highlightbackground=COLORS["line"], highlightthickness=1)
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
+        self.content = tk.Frame(shell, bg=COLORS["bg"])
+        self.content.pack(side="left", fill="both", expand=True)
+
+        brand = tk.Frame(self.sidebar, bg=COLORS["panel"])
+        brand.pack(fill="x", padx=18, pady=(24, 26))
+        tk.Label(brand, text="PRIME", font=("Segoe UI", 21, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+        tk.Label(brand, text="HUB  /  GAME CENTER", font=("Segoe UI", 8, "bold"), fg=COLORS["blue"], bg=COLORS["panel"]).pack(anchor="w", pady=(2, 0))
+        tk.Frame(self.sidebar, bg=COLORS["line"], height=1).pack(fill="x", padx=14, pady=(0, 12))
+
+        self.nav_home = tk.Button(self.sidebar, text="▦   Моя библиотека", command=self.show_home, anchor="w", bg=COLORS["blue"], fg="white", activebackground=COLORS["blue"], activeforeground="white", bd=0, padx=17, pady=13, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.nav_home.pack(fill="x", padx=10, pady=4)
+        self.nav_settings = tk.Button(self.sidebar, text="⚙   Настройки", command=self.show_settings, anchor="w", bg=COLORS["panel"], fg=COLORS["muted"], activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=13, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.nav_settings.pack(fill="x", padx=10, pady=4)
+        tk.Label(self.sidebar, text="ПРОФИЛЬ ИГР", font=("Segoe UI", 8, "bold"), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18, pady=(22, 7))
+        self.nav_apocalypse = tk.Button(self.sidebar, text="☣   Apocalypse", command=self.show_apocalypse_settings, anchor="w", bg=COLORS["panel"], fg="#e89a9d", activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=11, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.nav_apocalypse.pack(fill="x", padx=10, pady=2)
+        tk.Frame(self.sidebar, bg=COLORS["panel"]).pack(fill="both", expand=True)
+        tk.Label(self.sidebar, text="PRIMEHUB  " + APP_VERSION, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=17, pady=(0, 18))
+
+        self.home_view = tk.Frame(self.content, bg=COLORS["bg"])
+        self.home_view.pack(fill="both", expand=True)
+        header = tk.Frame(self.home_view, bg=COLORS["bg"])
+        header.pack(fill="x", padx=28, pady=(22, 12))
+        brand_header = tk.Frame(header, bg=COLORS["bg"])
+        brand_header.pack(side="left")
+        tk.Label(brand_header, text="ТВОЯ БИБЛИОТЕКА", font=("Segoe UI", 18, "bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(side="left")
         self.platform_box = tk.Frame(header, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
         self.platform_box.pack(side="right")
-        self.pc_btn = tk.Button(self.platform_box, text="▣  PC", command=lambda:self.set_platform("PC"), bd=0, padx=22, pady=11, font=("Segoe UI",10,"bold"), cursor="hand2")
-        self.android_btn = tk.Button(self.platform_box, text="▣  ANDROID", command=lambda:self.set_platform("Android"), bd=0, padx=22, pady=11, font=("Segoe UI",10,"bold"), cursor="hand2")
+        self.pc_btn = tk.Button(self.platform_box, text="▣  PC", command=lambda:self.set_platform("PC"), bd=0, padx=18, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.android_btn = tk.Button(self.platform_box, text="▣  ANDROID", command=lambda:self.set_platform("Android"), bd=0, padx=18, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.pc_btn.pack(side="left")
         self.android_btn.pack(side="left")
-        self.account_btn = tk.Button(header, text="Войти / Регистрация", command=self.open_account, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=15, pady=11, font=("Segoe UI",9,"bold"), cursor="hand2")
-        self.account_btn.pack(side="right", padx=(0,12))
-        hero = tk.Frame(self.root, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
-        hero.pack(fill="x", padx=34, pady=(8,20))
+        self.account_btn = tk.Button(header, text="Войти / Регистрация", command=self.open_account, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=13, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.account_btn.pack(side="right", padx=(0, 10))
+
+        hero = tk.Frame(self.home_view, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+        hero.pack(fill="x", padx=28, pady=(6, 17))
         hero_inner = tk.Frame(hero, bg=COLORS["panel"])
-        hero_inner.pack(fill="x", padx=25, pady=20)
-        tk.Label(hero_inner, text="ТВОИ ИГРЫ. В ОДНОМ МЕСТЕ.", font=("Segoe UI",20,"bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
-        tk.Label(hero_inner, text="Выбирай игру — PrimeHub проверит обновления, установит недостающие файлы и запустит её.", font=("Segoe UI",10), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(7,0))
+        hero_inner.pack(fill="x", padx=22, pady=17)
+        tk.Label(hero_inner, text="ТВОИ ИГРЫ. В ОДНОМ МЕСТЕ.", font=("Segoe UI", 18, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+        tk.Label(hero_inner, text="PrimeHub проверяет обновления, устанавливает файлы и запускает игры.", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(6, 0))
         row = tk.Frame(hero_inner, bg=COLORS["panel"])
-        row.pack(fill="x", pady=(14,0))
-        self.status = tk.Label(row, text="● Проверка каталога...", font=("Segoe UI",9,"bold"), fg=COLORS["cyan"], bg=COLORS["panel"])
+        row.pack(fill="x", pady=(12, 0))
+        self.status = tk.Label(row, text="● Проверка каталога...", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["panel"])
         self.status.pack(side="left")
-        self.refresh_btn = tk.Button(row, text="Проверить обновления", command=self.check_updates_async, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=14, pady=8, cursor="hand2")
+        self.refresh_btn = tk.Button(row, text="Проверить обновления", command=self.check_updates_async, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=13, pady=8, cursor="hand2")
         self.refresh_btn.pack(side="right")
-        section = tk.Frame(self.root, bg=COLORS["bg"])
-        section.pack(fill="x", padx=34, pady=(0,10))
-        tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI",11,"bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
-        self.count_label = tk.Label(section, text="", font=("Segoe UI",9), fg=COLORS["muted"], bg=COLORS["bg"])
+        section = tk.Frame(self.home_view, bg=COLORS["bg"])
+        section.pack(fill="x", padx=28, pady=(0, 9))
+        tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI", 10, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
+        self.count_label = tk.Label(section, text="", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"])
         self.count_label.pack(side="right")
-        self.cards = tk.Frame(self.root, bg=COLORS["bg"])
-        self.cards.pack(fill="both", expand=True, padx=34, pady=(0,10))
-        bottom = tk.Frame(self.root, bg=COLORS["bg"])
-        bottom.pack(fill="x", padx=34, pady=(0,20))
+        self.cards = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.cards.pack(fill="both", expand=True, padx=28, pady=(0, 8))
+        bottom = tk.Frame(self.home_view, bg=COLORS["bg"])
+        bottom.pack(fill="x", padx=28, pady=(0, 16))
         self.progress = ttk.Progressbar(bottom, style="Hub.Horizontal.TProgressbar", mode="determinate", maximum=100)
         self.progress.pack(fill="x")
-        self.progress_text = tk.Label(bottom, text="Игры устанавливаются в папку PrimeHub, не на рабочий стол.", font=("Segoe UI",8), fg=COLORS["muted"], bg=COLORS["bg"])
-        self.progress_text.pack(anchor="w", pady=(7,0))
-        self.set_platform("PC")
+        self.progress_text = tk.Label(bottom, text="Игры устанавливаются в папку PrimeHub, не на рабочий стол.", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["bg"])
+        self.progress_text.pack(anchor="w", pady=(7, 0))
+        self.settings_view = None
+        last_platform = self.state.get("last_platform", "PC") if self.get_launcher_settings().get("remember_platform", True) else "PC"
+        self.set_platform(last_platform if last_platform in ("PC", "Android") else "PC")
+
+    def get_launcher_settings(self):
+        defaults = {
+            "check_updates_on_start": True,
+            "confirm_updates": True,
+            "close_hub_after_launch": False,
+            "remember_platform": True,
+        }
+        stored = self.state.get("primehub_settings", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        return {**defaults, **stored}
+
+    def get_apocalypse_settings(self):
+        defaults = {
+            "effects": "high", "joy": 100, "motion": True, "hints": True,
+            "weather": True, "ambientAudio": True, "infectedCap": 18,
+            "eventFrequency": 1.0, "autosaveSeconds": 5,
+            "autoSprint": False, "showHydration": True,
+        }
+        stored = self.state.get("apocalypse_settings", {})
+        if not isinstance(stored, dict):
+            stored = {}
+        try:
+            if APOCALYPSE_CONFIG.is_file():
+                disk = json.loads(APOCALYPSE_CONFIG.read_text(encoding="utf-8"))
+                if isinstance(disk, dict):
+                    stored = {**stored, **disk}
+        except (OSError, ValueError, TypeError):
+            pass
+        result = {**defaults, **stored}
+        if result["effects"] not in ("high", "balanced", "low"):
+            result["effects"] = "high"
+        result["joy"] = max(85, min(135, int(result.get("joy", 100))))
+        result["infectedCap"] = max(8, min(24, int(result.get("infectedCap", 18))))
+        result["eventFrequency"] = max(0.5, min(1.8, float(result.get("eventFrequency", 1))))
+        result["autosaveSeconds"] = int(result.get("autosaveSeconds", 5))
+        if result["autosaveSeconds"] not in (5, 10, 15, 30):
+            result["autosaveSeconds"] = 5
+        for key in ("motion", "hints", "weather", "ambientAudio", "autoSprint", "showHydration"):
+            result[key] = bool(result.get(key, defaults[key]))
+        return result
+
+    def _save_settings_to_disk(self):
+        self.state["primehub_settings"] = self.get_launcher_settings()
+        settings = self._settings_form_values if getattr(self, "_settings_form_values", None) else self.get_apocalypse_settings()
+        self.state["apocalypse_settings"] = dict(settings)
+        ROOT.mkdir(parents=True, exist_ok=True)
+        temp = APOCALYPSE_CONFIG.with_suffix(".tmp")
+        temp.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, APOCALYPSE_CONFIG)
+        self.save_state()
+
+    def _nav_style(self, active):
+        self.nav_home.configure(bg=COLORS["blue"] if active == "home" else COLORS["panel"], fg="white" if active == "home" else COLORS["muted"])
+        self.nav_settings.configure(bg=COLORS["blue"] if active == "settings" else COLORS["panel"], fg="white" if active == "settings" else COLORS["muted"])
+        self.nav_apocalypse.configure(bg=COLORS["panel2"] if active == "apocalypse" else COLORS["panel"], fg="#ffd6d7" if active == "apocalypse" else "#e89a9d")
+
+    def show_home(self):
+        if self.settings_view and self.settings_view.winfo_exists():
+            self.settings_view.pack_forget()
+        self.home_view.pack(fill="both", expand=True)
+        self._nav_style("home")
+
+    def show_settings(self):
+        self._render_settings("settings")
+
+    def show_apocalypse_settings(self):
+        self._render_settings("apocalypse")
+
+    def _render_settings(self, active_tab="settings"):
+        self.home_view.pack_forget()
+        if self.settings_view and self.settings_view.winfo_exists():
+            self.settings_view.destroy()
+        self.settings_view = tk.Frame(self.content, bg=COLORS["bg"])
+        self.settings_view.pack(fill="both", expand=True)
+        self._nav_style(active_tab)
+
+        title = tk.Label(self.settings_view, text="Настройки PrimeHub" if active_tab == "settings" else "Настройки Apocalypse", font=("Segoe UI", 20, "bold"), fg=COLORS["text"], bg=COLORS["bg"])
+        title.pack(anchor="w", padx=28, pady=(24, 5))
+        subtitle = "Параметры лаунчера сохраняются в профиле пользователя." if active_tab == "settings" else "Эти параметры передаются в Apocalypse при запуске и синхронизируются с её внутриигровым меню."
+        tk.Label(self.settings_view, text=subtitle, font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w", padx=28, pady=(0, 14))
+
+        canvas_wrap = tk.Frame(self.settings_view, bg=COLORS["bg"])
+        canvas_wrap.pack(fill="both", expand=True, padx=24, pady=(0, 8))
+        canvas = tk.Canvas(canvas_wrap, bg=COLORS["bg"], highlightthickness=0)
+        scroll = ttk.Scrollbar(canvas_wrap, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg=COLORS["bg"])
+        body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        variables = {}
+        if active_tab == "settings":
+            values = self.get_launcher_settings()
+            rows = [
+                ("check_updates_on_start", "Проверять обновления при запуске", "Проверять каталог PrimeHub после открытия лаунчера.", "bool"),
+                ("confirm_updates", "Подтверждать обновление игры", "Перед заменой уже установленной версии показывать запрос.", "bool"),
+                ("close_hub_after_launch", "Закрывать PrimeHub после запуска игры", "Лаунчер останется закрытым, а игра продолжит работать.", "bool"),
+                ("remember_platform", "Запоминать выбранную платформу", "Открывать PC или Android так, как было выбрано в прошлый раз.", "bool"),
+            ]
+            tk.Label(body, text="ОБЩИЕ ПАРАМЕТРЫ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(4, 8))
+            for key, label, description, kind in rows:
+                card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+                card.pack(fill="x", pady=5)
+                copy = tk.Frame(card, bg=COLORS["panel"])
+                copy.pack(side="left", fill="x", expand=True, padx=15, pady=12)
+                tk.Label(copy, text=label, font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+                tk.Label(copy, text=description, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(3, 0))
+                var = tk.BooleanVar(value=bool(values.get(key, False)))
+                variables[key] = var
+                tk.Checkbutton(card, variable=var, text="ВКЛ", onvalue=True, offvalue=False, bg=COLORS["panel"], fg=COLORS["cyan"], selectcolor=COLORS["panel2"], activebackground=COLORS["panel"], activeforeground=COLORS["text"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=18)
+        else:
+            values = self.get_apocalypse_settings()
+            self._settings_form_values = {}
+            tk.Label(body, text="ГРАФИКА И ПОГОДА", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(4, 8))
+            choices = {
+                "effects": ("Качество эффектов", "Количество частиц, дым и атмосферные эффекты.", [("Высокое", "high"), ("Сбалансированное", "balanced"), ("Минимум частиц", "low")]),
+                "infectedCap": ("Лимит заражённых", "Максимум активных заражённых одновременно.", [("8", "8"), ("12", "12"), ("18", "18"), ("24", "24")]),
+                "eventFrequency": ("Частота событий", "Насколько часто появляются патрули и тревоги.", [("Редко", "0.5"), ("Обычная", "1"), ("Часто", "1.5")]),
+                "autosaveSeconds": ("Автосохранение", "Как часто сохраняется игровой мир.", [("5 секунд", "5"), ("10 секунд", "10"), ("15 секунд", "15"), ("30 секунд", "30")]),
+                "joy": ("Размер джойстика", "Масштаб сенсорного джойстика на мобильной версии.", [("85%", "85"), ("100%", "100"), ("115%", "115"), ("135%", "135")]),
+            }
+            for key, (label, description, options) in choices.items():
+                card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+                card.pack(fill="x", pady=5)
+                copy = tk.Frame(card, bg=COLORS["panel"])
+                copy.pack(side="left", fill="x", expand=True, padx=15, pady=11)
+                tk.Label(copy, text=label, font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+                tk.Label(copy, text=description, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(3, 0))
+                variable = tk.StringVar(value=str(values.get(key, "")))
+                variables[key] = variable
+                combo = ttk.Combobox(card, values=[v for _, v in options], state="readonly", width=15)
+                combo.set(variable.get())
+                combo.pack(side="right", padx=16, pady=12)
+                combo.bind("<<ComboboxSelected>>", lambda _e, k=key, c=combo: variables[k].set(c.get()))
+            tk.Label(body, text="ИГРОВОЙ ПРОЦЕСС", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(18, 8))
+            for key, label, description in [
+                ("weather", "Погодные эффекты", "Дождь, гроза, туман и пыльные бури."),
+                ("ambientAudio", "Звуки окружения", "Отдалённые выстрелы и сигналы выживших."),
+                ("autoSprint", "Автоматический бег", "Бежать при движении, пока хватает выносливости."),
+                ("showHydration", "Индикатор жажды", "Показывать уровень чистой воды в игровом HUD."),
+                ("motion", "Плавные переходы", "Анимации интерфейса и переходов."),
+                ("hints", "Подсказки управления", "Показывать подсказки управления в игре."),
+            ]:
+                card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+                card.pack(fill="x", pady=5)
+                copy = tk.Frame(card, bg=COLORS["panel"])
+                copy.pack(side="left", fill="x", expand=True, padx=15, pady=11)
+                tk.Label(copy, text=label, font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+                tk.Label(copy, text=description, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(3, 0))
+                var = tk.BooleanVar(value=bool(values.get(key, True)))
+                variables[key] = var
+                tk.Checkbutton(card, variable=var, text="ВКЛ", onvalue=True, offvalue=False, bg=COLORS["panel"], fg=COLORS["cyan"], selectcolor=COLORS["panel2"], activebackground=COLORS["panel"], activeforeground=COLORS["text"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=18)
+
+        actions = tk.Frame(self.settings_view, bg=COLORS["bg"])
+        actions.pack(fill="x", padx=28, pady=(5, 18))
+        status = tk.Label(actions, text="Параметры ещё не сохранены.", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["bg"])
+        status.pack(side="left")
+
+        def save_page():
+            try:
+                if active_tab == "settings":
+                    settings = self.get_launcher_settings()
+                    settings.update({k: bool(v.get()) for k, v in variables.items()})
+                    self.state["primehub_settings"] = settings
+                    self.save_state()
+                else:
+                    defaults = self.get_apocalypse_settings()
+                    for key, var in variables.items():
+                        raw = var.get()
+                        if key in ("joy", "infectedCap", "autosaveSeconds"):
+                            defaults[key] = int(raw)
+                        elif key == "eventFrequency":
+                            defaults[key] = float(raw)
+                        else:
+                            defaults[key] = raw
+                    self._settings_form_values = defaults
+                    self.state["apocalypse_settings"] = dict(defaults)
+                    ROOT.mkdir(parents=True, exist_ok=True)
+                    temp = APOCALYPSE_CONFIG.with_suffix(".tmp")
+                    temp.write_text(json.dumps(defaults, ensure_ascii=False, indent=2), encoding="utf-8")
+                    os.replace(temp, APOCALYPSE_CONFIG)
+                    self.save_state()
+                status.configure(text="Сохранено. Новые значения применятся при следующем запуске Apocalypse.", fg=COLORS["green"])
+            except Exception as exc:
+                status.configure(text="Не удалось сохранить: " + str(exc), fg=COLORS["orange"])
+
+        def reset_page():
+            if active_tab == "settings":
+                self.state["primehub_settings"] = {
+                    "check_updates_on_start": True, "confirm_updates": True,
+                    "close_hub_after_launch": False, "remember_platform": True,
+                }
+            else:
+                self.state["apocalypse_settings"] = {
+                    "effects": "high", "joy": 100, "motion": True, "hints": True,
+                    "weather": True, "ambientAudio": True, "infectedCap": 18,
+                    "eventFrequency": 1.0, "autosaveSeconds": 5,
+                    "autoSprint": False, "showHydration": True,
+                }
+                settings = self.state["apocalypse_settings"]
+                APOCALYPSE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+                APOCALYPSE_CONFIG.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.save_state()
+            self._render_settings(active_tab)
+            status.configure(text="Настройки сброшены.", fg=COLORS["green"])
+
+        save_btn = tk.Button(actions, text="СОХРАНИТЬ", command=save_page, bg=COLORS["blue"], fg="white", activebackground=COLORS["cyan"], activeforeground="#07101d", bd=0, padx=17, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        save_btn.pack(side="right", padx=(8, 0))
+        reset_btn = tk.Button(actions, text="СБРОСИТЬ", command=reset_page, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=15, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        reset_btn.pack(side="right")
+
+    def set_platform(self, platform):
+        self.platform = platform
+        for b,p in ((self.pc_btn,"PC"),(self.android_btn,"Android")):
+            active = p == platform
+            b.configure(bg=COLORS["blue"] if active else COLORS["panel"], fg="white" if active else COLORS["muted"])
+        if self.get_launcher_settings().get("remember_platform", True):
+            self.state["last_platform"] = platform
+            try:
+                self.save_state()
+            except OSError:
+                pass
+        self.refresh_cards()
 
     def set_platform(self, platform):
         self.platform = platform
