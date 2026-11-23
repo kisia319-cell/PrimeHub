@@ -4,8 +4,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.5"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.3.0"
+APP_VERSION = "v1.2.6"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.0"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -173,7 +173,7 @@ class PrimeHub:
             "effects": "high", "joy": 100, "motion": True, "hints": True,
             "weather": True, "ambientAudio": True, "infectedCap": 18,
             "eventFrequency": 1.0, "autosaveSeconds": 5,
-            "autoSprint": False, "showHydration": True,
+            "autoSprint": False, "showHydration": True, "survivalDifficulty": "standard", "renderDistance": "normal", "showEnemyHealth": True, "showSurvivalHud": True,
         }
         stored = self.state.get("apocalypse_settings", {})
         if not isinstance(stored, dict):
@@ -194,7 +194,11 @@ class PrimeHub:
         result["autosaveSeconds"] = int(result.get("autosaveSeconds", 5))
         if result["autosaveSeconds"] not in (5, 10, 15, 30):
             result["autosaveSeconds"] = 5
-        for key in ("motion", "hints", "weather", "ambientAudio", "autoSprint", "showHydration"):
+        if result.get("survivalDifficulty") not in ("easy", "standard", "hard"):
+            result["survivalDifficulty"] = "standard"
+        if result.get("renderDistance") not in ("near", "normal", "far"):
+            result["renderDistance"] = "normal"
+        for key in ("motion", "hints", "weather", "ambientAudio", "autoSprint", "showHydration", "showEnemyHealth", "showSurvivalHud"):
             result[key] = bool(result.get(key, defaults[key]))
         return result
 
@@ -279,6 +283,8 @@ class PrimeHub:
                 "eventFrequency": ("Частота событий", "Насколько часто появляются патрули и тревоги.", [("Редко", "0.5"), ("Обычная", "1"), ("Часто", "1.5")]),
                 "autosaveSeconds": ("Автосохранение", "Как часто сохраняется игровой мир.", [("5 секунд", "5"), ("10 секунд", "10"), ("15 секунд", "15"), ("30 секунд", "30")]),
                 "joy": ("Размер джойстика", "Масштаб сенсорного джойстика на мобильной версии.", [("85%", "85"), ("100%", "100"), ("115%", "115"), ("135%", "135")]),
+                "survivalDifficulty": ("Сложность выживания", "Влияет на заражение и переохлаждение.", [("Облегчённая", "easy"), ("Стандартная", "standard"), ("Суровая", "hard")]),
+                "renderDistance": ("Дальность прорисовки", "Управляет количеством видимых дальних объектов без ухудшения текстур.", [("Ближе", "near"), ("Стандартная", "normal"), ("Дальняя", "far")]),
             }
             for key, (label, description, options) in choices.items():
                 card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
@@ -299,6 +305,8 @@ class PrimeHub:
                 ("ambientAudio", "Звуки окружения", "Отдалённые выстрелы и сигналы выживших."),
                 ("autoSprint", "Автоматический бег", "Бежать при движении, пока хватает выносливости."),
                 ("showHydration", "Индикатор жажды", "Показывать уровень чистой воды в игровом HUD."),
+                ("showEnemyHealth", "Полосы здоровья заражённых", "Показывать оставшееся здоровье противника."),
+                ("showSurvivalHud", "Индикаторы выживания", "Показывать инфекцию и температуру тела."),
                 ("motion", "Плавные переходы", "Анимации интерфейса и переходов."),
                 ("hints", "Подсказки управления", "Показывать подсказки управления в игре."),
             ]:
@@ -356,7 +364,7 @@ class PrimeHub:
                     "effects": "high", "joy": 100, "motion": True, "hints": True,
                     "weather": True, "ambientAudio": True, "infectedCap": 18,
                     "eventFrequency": 1.0, "autosaveSeconds": 5,
-                    "autoSprint": False, "showHydration": True,
+                    "autoSprint": False, "showHydration": True, "survivalDifficulty": "standard", "renderDistance": "normal", "showEnemyHealth": True, "showSurvivalHud": True,
                 }
                 settings = self.state["apocalypse_settings"]
                 APOCALYPSE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
