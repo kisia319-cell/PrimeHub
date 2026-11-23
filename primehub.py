@@ -14,7 +14,7 @@ APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
-API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
+API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
@@ -658,17 +658,26 @@ class PrimeHub:
             self.releases["mobile"]=mob
             apocalypse_pc=self.fetch_latest_apocalypse_release()
             self.releases["apocalypse_pc"]=apocalypse_pc
-            try:
-                hub=self.fetch_json(API_HUB)
+            # Check PrimeHub itself independently from game releases. Do not hide
+            # failures here: the old code silently swallowed Hub-check errors, so
+            # the button could report success while never checking its own update.
+            hub=self.fetch_json(API_HUB)
+            self.releases["hub"]=hub
+            hub_tag=str(hub.get("tag_name","")).strip()
+            hub_asset=self.find_asset(hub,"PrimeHub.exe")
+            if not hub_tag:
+                raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
+            if not hub_asset or not hub_asset.get("browser_download_url"):
+                raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
+            hub_update_available = hub_tag.lower() != APP_VERSION.lower()
+            if hub_update_available:
                 self.check_hub_update(hub)
-            except Exception:
-                pass
-            # Updates are user-triggered from each game card. Never start a
-            # background install immediately after a check; keep the Update
-            # button visible so the player can choose when Apocalypse is replaced.
+                # The updater will close this process after the verified EXE is staged.
+                self.set_status("Найдено обновление PrimeHub "+hub_tag+" — подготовка установки...",COLORS["green"])
+            else:
+                self.set_status("PrimeHub актуален ("+hub_tag+"). Каталог игр также обновлён.",COLORS["green"])
             self.root.after(0,self.refresh_cards)
-            self.set_status("Каталог обновлён • "+sky.get("tag_name","")+" / "+mob.get("tag_name","")+" / "+apocalypse_pc.get("tag_name",""),COLORS["green"])
-            self.set_progress(0,"Проверка завершена. Установщики и игры сохраняются внутри папки PrimeHub.")
+            self.set_progress(0,"Проверка завершена • PrimeHub "+hub_tag+" • SkyRealm "+sky.get("tag_name","")+" • Apocalypse "+apocalypse_pc.get("tag_name",""))
         except Exception as e:
             self.set_status("Нет соединения с сервером обновлений",COLORS["orange"])
             self.set_progress(0,"Не удалось проверить обновления: "+str(e))
@@ -685,8 +694,9 @@ class PrimeHub:
         if not asset:
             return
         stamp = str(asset.get("updated_at") or asset.get("id") or release.get("tag_name"))
-        if self.state.get("hub_asset_stamp") == stamp:
-            return
+        # A previous attempt may have saved this stamp before Windows allowed
+        # the replacement script to finish. Never let that stale marker block
+        # a retry when the running executable is still an older version.
         current = Path(sys.executable).resolve()
         update_dir = ROOT / "updates"
         staged = update_dir / "PrimeHub.next.exe"
