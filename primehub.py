@@ -745,8 +745,25 @@ class PrimeHub:
         return target
 
     def install_game(self, game):
-        if self.busy: return
-        threading.Thread(target=self._install_game,args=(game,),daemon=True).start()
+        if self.busy:
+            return
+        installed = self.is_installed(game)
+        if game == "Apocalypse":
+            release_tag = (self.releases.get("apocalypse_pc") or {}).get("tag_name")
+        elif game in ("SkyRealm", "PrimeLauncher"):
+            release_tag = (self.releases.get("sky") or {}).get("tag_name")
+        else:
+            release_tag = (self.releases.get("mobile") or {}).get("tag_name")
+        updating = installed and self.needs_update(game, release_tag)
+        if updating and self.get_launcher_settings().get("confirm_updates", True):
+            accepted = messagebox.askyesno(
+                "Подтверждение обновления",
+                "Установить обновление " + game + "?\n\nТекущая версия будет заменена только после успешной проверки загруженных файлов.",
+                parent=self.root,
+            )
+            if not accepted:
+                return
+        threading.Thread(target=self._install_game, args=(game,), daemon=True).start()
 
     def _install_updates_sequential(self, games):
         """Install every detected update one by one so the shared busy flag stays safe."""
