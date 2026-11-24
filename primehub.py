@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.10"
+APP_VERSION = "v1.2.11"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.3"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -470,7 +470,9 @@ class PrimeHub:
             sky_tag=self.releases.get("sky",{}).get("tag_name")
             sky_update=self.needs_update("SkyRealm",sky_tag)
             sky_installed=self.is_installed("SkyRealm")
-            self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", "PC • Windows", "Обычный открытый мир SkyRealm. Устанавливается отдельно от Apocalypse.", "#285f83", "ОБНОВИТЬ" if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
+            sky_installed_tag=str((self.state.get("SkyRealm") or {}).get("version") or "неизвестно")
+            sky_version_label=("ДОСТУПНО ОБНОВЛЕНИЕ: " + str(sky_tag) + " • УСТАНОВЛЕНО: " + sky_installed_tag) if sky_update else ("PC • " + str(sky_tag or "Windows"))
+            self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", sky_version_label, "Обычный открытый мир SkyRealm. Устанавливается отдельно от Apocalypse.", "#285f83", ("ОБНОВИТЬ ДО " + str(sky_tag)) if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
             prime_update=self.needs_update("PrimeLauncher",sky_tag)
             prime_installed=self.is_installed("PrimeLauncher")
             self.card(self.cards,"PrimeLauncher","ONLINE • ARENA", "PC • Windows", "Отдельная соревновательная игра PrimeLauncher.", "#59428f", "ОБНОВИТЬ" if prime_update else ("ЗАПУСТИТЬ" if prime_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("PrimeLauncher")) if prime_update or not prime_installed else (lambda:self.launch_game("PrimeLauncher")), prime_installed)
@@ -665,6 +667,16 @@ class PrimeHub:
             try:
                 sky = self.fetch_json(API_SKY)
                 self.releases["sky"] = sky
+                installed_sky = str((self.state.get("SkyRealm") or {}).get("version") or "не установлено")
+                latest_sky = str(sky.get("tag_name") or "")
+                if latest_sky and installed_sky != latest_sky:
+                    self.set_status("Доступно обновление SkyRealm: " + installed_sky + " → " + latest_sky, COLORS["green"])
+                try:
+                    ROOT.mkdir(parents=True, exist_ok=True)
+                    with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
+                        log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " SkyRealm installed=" + installed_sky + " latest=" + latest_sky + " assets=" + ",".join(a.get("name", "") for a in sky.get("assets", [])) + "\\n")
+                except OSError:
+                    pass
             except Exception as exc:
                 errors.append("SkyRealm: " + str(exc))
 
