@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.15"
+APP_VERSION = "v1.2.16"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -779,21 +779,33 @@ class PrimeHub:
                 raise RuntimeError("Файл обновления PrimeHub повреждён или не является Windows EXE. Старая версия сохранена.")
         staged_size = staged.stat().st_size
         temp_current = current.with_name(current.name + ".new")
+        parent_pid = os.getpid()
+        backup = current.with_name(current.name + ".previous")
         lines = [
             "@echo off",
             "setlocal",
             "set \"STAGED=" + str(staged) + "\"",
             "set \"CURRENT=" + str(current) + "\"",
             "set \"TEMPFILE=" + str(temp_current) + "\"",
-            ":retry",
+            "set \"BACKUP=" + str(backup) + "\"",
+            "set \"PARENT_PID=" + str(parent_pid) + "\"",
+            ":wait_for_hub_exit",
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Get-Process -Id %PARENT_PID% -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }\"",
+            "if not errorlevel 1 goto install_update",
+            "timeout /t 1 /nobreak >nul",
+            "goto wait_for_hub_exit",
+            ":install_update",
+            ":retry_copy",
             "copy /b /y \"%STAGED%\" \"%TEMPFILE%\" >nul 2>&1",
-            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)",
+            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry_copy)",
             "for %%A in (\"%STAGED%\") do set \"SOURCE_SIZE=%%~zA\"",
             "for %%A in (\"%TEMPFILE%\") do set \"COPY_SIZE=%%~zA\"",
-            "if not \"%SOURCE_SIZE%\"==\"%COPY_SIZE%\" (del /q \"%TEMPFILE%\" >nul 2>&1 & timeout /t 1 /nobreak >nul & goto retry)",
+            "if not \"%SOURCE_SIZE%\"==\"%COPY_SIZE%\" (del /q \"%TEMPFILE%\" >nul 2>&1 & timeout /t 1 /nobreak >nul & goto retry_copy)",
+            "if exist \"%CURRENT%\" copy /b /y \"%CURRENT%\" \"%BACKUP%\" >nul 2>&1",
             "move /y \"%TEMPFILE%\" \"%CURRENT%\" >nul 2>&1",
-            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry)",
-            "start \"\" \"%CURRENT%\"",
+            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry_copy)",
+            "start \"\" /D \"%~dp0\" \"%CURRENT%\"",
+            "timeout /t 2 /nobreak >nul",
             "del /q \"%STAGED%\" >nul 2>&1",
             'del "%~f0"'
         ]
