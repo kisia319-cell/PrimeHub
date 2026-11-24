@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.18"
+APP_VERSION = "v1.2.19"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -145,7 +145,12 @@ class PrimeHub:
         self.status.pack(side="left")
         self.refresh_btn = tk.Button(row, text="Проверить обновления", command=self.check_updates_async, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=13, pady=8, cursor="hand2")
         self.refresh_btn.pack(side="right")
-        self.update_banner = tk.Frame(self.home_view, bg="#183b35", highlightbackground=COLORS["green"], highlightthickness=1)
+        # Keep a permanent packed slot between the hero and library. The banner
+        # itself can be hidden/shown inside this slot without pack(before=...),
+        # which raises TclError when its sibling is temporarily unmanaged.
+        self.update_banner_slot = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.update_banner_slot.pack(fill="x", padx=28, pady=(0, 10))
+        self.update_banner = tk.Frame(self.update_banner_slot, bg="#183b35", highlightbackground=COLORS["green"], highlightthickness=1)
         self.update_banner_label = tk.Label(self.update_banner, text="", font=("Segoe UI", 10, "bold"), fg="#d9fff0", bg="#183b35", justify="left")
         self.update_banner_label.pack(side="left", fill="x", expand=True, padx=16, pady=12)
         self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
@@ -522,10 +527,11 @@ class PrimeHub:
                 self.update_banner_label.configure(text="ДОСТУПНО ОБНОВЛЕНИЕ APOCALYPSE  |  " + installed_apoc_tag + "  →  " + str(apoc_tag) + "   •   Текущая версия сохранится до успешной проверки новой.")
                 self.update_banner_button.configure(text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"))
                 if not self.update_banner.winfo_manager():
-                    self.update_banner.pack(fill="x", before=self.library_section, padx=28, pady=(0,10))
-                self.update_banner.lift()
+                    self.update_banner.pack(fill="x")
+                self.update_banner_slot.pack(fill="x", padx=28, pady=(0, 10))
             else:
                 self.update_banner.pack_forget()
+                self.update_banner_slot.pack_forget()
             self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "Windows • " + apoc_tag, "Отдельная Windows-сборка Apocalypse. Обновляется только из канала Apocalypse; обычный SkyRealm не затрагивается.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
