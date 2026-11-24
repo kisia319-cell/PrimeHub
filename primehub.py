@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.11"
+APP_VERSION = "v1.2.12"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.3"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -145,6 +145,12 @@ class PrimeHub:
         self.status.pack(side="left")
         self.refresh_btn = tk.Button(row, text="Проверить обновления", command=self.check_updates_async, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=13, pady=8, cursor="hand2")
         self.refresh_btn.pack(side="right")
+        self.update_banner = tk.Frame(self.home_view, bg="#183b35", highlightbackground=COLORS["green"], highlightthickness=1)
+        self.update_banner_label = tk.Label(self.update_banner, text="", font=("Segoe UI", 10, "bold"), fg="#d9fff0", bg="#183b35", justify="left")
+        self.update_banner_label.pack(side="left", fill="x", expand=True, padx=16, pady=12)
+        self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ SKYREALM", command=lambda:self.install_game("SkyRealm"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.update_banner_button.pack(side="right", padx=12, pady=8)
+        self.update_banner.pack_forget()
         section = tk.Frame(self.home_view, bg=COLORS["bg"])
         section.pack(fill="x", padx=28, pady=(0, 9))
         tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI", 10, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
@@ -467,10 +473,18 @@ class PrimeHub:
         for w in self.cards.winfo_children(): w.destroy()
         if self.platform == "PC":
             self.count_label.configure(text="3 игры")
-            sky_tag=self.releases.get("sky",{}).get("tag_name")
-            sky_update=self.needs_update("SkyRealm",sky_tag)
+            sky_tag=str((self.releases.get("sky") or {}).get("tag_name") or "").strip()
             sky_installed=self.is_installed("SkyRealm")
-            sky_installed_tag=str((self.state.get("SkyRealm") or {}).get("version") or "неизвестно")
+            sky_installed_tag=str((self.state.get("SkyRealm") or {}).get("version") or "неизвестно").strip()
+            # Compare installed and published release tags directly for the visible offer.
+            sky_update=bool(sky_installed and sky_tag and sky_installed_tag.lower() != sky_tag.lower())
+            if sky_update:
+                self.update_banner_label.configure(text="ДОСТУПНО ОБНОВЛЕНИЕ SKYREALM  |  " + sky_installed_tag + "  →  " + sky_tag + "   •   Ваши миры и сохранения останутся на месте.")
+                if not self.update_banner.winfo_manager():
+                    self.update_banner.pack(fill="x", before=self.cards.master.winfo_children()[2], padx=28, pady=(0,10))
+                self.update_banner.lift()
+            else:
+                self.update_banner.pack_forget()
             sky_version_label=("ДОСТУПНО ОБНОВЛЕНИЕ: " + str(sky_tag) + " • УСТАНОВЛЕНО: " + sky_installed_tag) if sky_update else ("PC • " + str(sky_tag or "Windows"))
             self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", sky_version_label, "Обычный открытый мир SkyRealm. Устанавливается отдельно от Apocalypse.", "#285f83", ("ОБНОВИТЬ ДО " + str(sky_tag)) if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
             prime_update=self.needs_update("PrimeLauncher",sky_tag)
@@ -674,7 +688,7 @@ class PrimeHub:
                 try:
                     ROOT.mkdir(parents=True, exist_ok=True)
                     with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
-                        log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " SkyRealm installed=" + installed_sky + " latest=" + latest_sky + " assets=" + ",".join(a.get("name", "") for a in sky.get("assets", [])) + "\\n")
+                        log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " SkyRealm installed=" + installed_sky + " latest=" + latest_sky + " installed_files=" + str(self.is_installed("SkyRealm")) + " needs_update=" + str(self.needs_update("SkyRealm", latest_sky)) + " assets=" + ",".join(a.get("name", "") for a in sky.get("assets", [])) + "\\n")
                 except OSError:
                     pass
             except Exception as exc:
