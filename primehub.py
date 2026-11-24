@@ -4,8 +4,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.12"
-APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.3"
+APP_VERSION = "v1.2.13"
+APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.2"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
@@ -148,7 +148,7 @@ class PrimeHub:
         self.update_banner = tk.Frame(self.home_view, bg="#183b35", highlightbackground=COLORS["green"], highlightthickness=1)
         self.update_banner_label = tk.Label(self.update_banner, text="", font=("Segoe UI", 10, "bold"), fg="#d9fff0", bg="#183b35", justify="left")
         self.update_banner_label.pack(side="left", fill="x", expand=True, padx=16, pady=12)
-        self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ SKYREALM", command=lambda:self.install_game("SkyRealm"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.update_banner_button.pack(side="right", padx=12, pady=8)
         self.update_banner.pack_forget()
         section = tk.Frame(self.home_view, bg=COLORS["bg"])
@@ -476,15 +476,9 @@ class PrimeHub:
             sky_tag=str((self.releases.get("sky") or {}).get("tag_name") or "").strip()
             sky_installed=self.is_installed("SkyRealm")
             sky_installed_tag=str((self.state.get("SkyRealm") or {}).get("version") or "неизвестно").strip()
-            # Compare installed and published release tags directly for the visible offer.
+            # Prominent update banner is reserved for Apocalypse. SkyRealm updates stay on its own card.
             sky_update=bool(sky_installed and sky_tag and sky_installed_tag.lower() != sky_tag.lower())
-            if sky_update:
-                self.update_banner_label.configure(text="ДОСТУПНО ОБНОВЛЕНИЕ SKYREALM  |  " + sky_installed_tag + "  →  " + sky_tag + "   •   Ваши миры и сохранения останутся на месте.")
-                if not self.update_banner.winfo_manager():
-                    self.update_banner.pack(fill="x", before=self.cards.master.winfo_children()[2], padx=28, pady=(0,10))
-                self.update_banner.lift()
-            else:
-                self.update_banner.pack_forget()
+            self.update_banner.pack_forget()
             sky_version_label=("ДОСТУПНО ОБНОВЛЕНИЕ: " + str(sky_tag) + " • УСТАНОВЛЕНО: " + sky_installed_tag) if sky_update else ("PC • " + str(sky_tag or "Windows"))
             self.card(self.cards,"SkyRealm","OPEN WORLD • ADVENTURE", sky_version_label, "Обычный открытый мир SkyRealm. Устанавливается отдельно от Apocalypse.", "#285f83", ("ОБНОВИТЬ ДО " + str(sky_tag)) if sky_update else ("ЗАПУСТИТЬ" if sky_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("SkyRealm")) if sky_update or not sky_installed else (lambda:self.launch_game("SkyRealm")), sky_installed)
             prime_update=self.needs_update("PrimeLauncher",sky_tag)
@@ -493,7 +487,16 @@ class PrimeHub:
             apoc_tag=self.releases.get("apocalypse_pc",{}).get("tag_name") or APOCALYPSE_PC_VERSION
             apoc_update=self.needs_update("Apocalypse",apoc_tag)
             apoc_installed=self.is_installed("Apocalypse")
-            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "Windows • " + apoc_tag, "Отдельная Windows-сборка Apocalypse. PrimeHub проверяет её релиз независимо от обычного SkyRealm; при новой версии появится кнопка «ОБНОВИТЬ».", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
+            if apoc_update:
+                installed_apoc_tag=str((self.state.get("Apocalypse") or {}).get("version") or "неизвестно")
+                self.update_banner_label.configure(text="ДОСТУПНО ОБНОВЛЕНИЕ APOCALYPSE  |  " + installed_apoc_tag + "  →  " + str(apoc_tag) + "   •   Текущая версия сохранится до успешной проверки новой.")
+                self.update_banner_button.configure(text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"))
+                if not self.update_banner.winfo_manager():
+                    self.update_banner.pack(fill="x", before=self.cards.master.winfo_children()[2], padx=28, pady=(0,10))
+                self.update_banner.lift()
+            else:
+                self.update_banner.pack_forget()
+            self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "Windows • " + apoc_tag, "Отдельная Windows-сборка Apocalypse. Обновляется только из канала Apocalypse; обычный SkyRealm не затрагивается.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
             mobile_tag=self.releases.get("mobile",{}).get("tag_name")
@@ -1074,8 +1077,10 @@ class PrimeHub:
             self.root.after(0,self.refresh_cards)
         except Exception as e:
             self.set_status("Не удалось завершить установку",COLORS["orange"])
-            self.set_progress(0,str(e))
-            self.root.after(0,lambda:messagebox.showerror("PrimeHub",str(e)))
+            self.set_progress(0,"Ошибка загрузки: " + str(e))
+            # Restore the library after a failed GitHub request/download.
+            self.root.after(0, self.refresh_cards)
+            self.root.after(0,lambda:messagebox.showerror("PrimeHub — ошибка обновления", "Не удалось скачать или проверить обновление.\nСтарая версия и сохранения оставлены без изменений.\n\n" + str(e)))
         finally: self.busy=False
 
 
