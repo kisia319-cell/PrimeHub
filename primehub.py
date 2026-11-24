@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.9"
+APP_VERSION = "v1.2.10"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.4.3"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -14,7 +14,7 @@ APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
-API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
+API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
@@ -49,6 +49,12 @@ def _dpapi_transform(raw: bytes, protect: bool) -> bytes:
         return ctypes.string_at(target.pbData, target.cbData)
     finally:
         kernel.LocalFree(target.pbData)
+
+def _version_key(value):
+    """Compare dotted release versions numerically (v1.2.10 > v1.2.9)."""
+    parts = re.findall(r"\\d+", str(value or ""))
+    return tuple(int(part) for part in parts) if parts else ()
+
 
 COLORS = {"bg":"#0b1020","panel":"#121a2d","panel2":"#18243b","line":"#263650","text":"#eef4ff","muted":"#91a3bf","blue":"#4d8dff","cyan":"#55d5e8","green":"#54d69a","orange":"#ffbd66"}
 
@@ -648,41 +654,74 @@ class PrimeHub:
         threading.Thread(target=self.check_updates,daemon=True).start()
 
     def check_updates(self):
-        self.busy=True
-        auto_updates=[]
+        self.busy = True
+        errors = []
         self.set_status("Проверяем официальные версии...")
+        sky = mobile = apocalypse_pc = hub = None
+
+        # Each release channel is independent. A rate limit or missing Apocalypse
+        # release must never abort the ordinary SkyRealm or PrimeHub update checks.
         try:
-            sky=self.fetch_json(API_SKY)
-            self.releases["sky"]=sky
-            mob=self.fetch_json(API_PRIME_MOBILE)
-            self.releases["mobile"]=mob
-            apocalypse_pc=self.fetch_latest_apocalypse_release()
-            self.releases["apocalypse_pc"]=apocalypse_pc
-            # Check PrimeHub itself independently from game releases. Do not hide
-            # failures here: the old code silently swallowed Hub-check errors, so
-            # the button could report success while never checking its own update.
-            hub=self.fetch_json(API_HUB)
-            self.releases["hub"]=hub
-            hub_tag=str(hub.get("tag_name","")).strip()
-            hub_asset=self.find_asset(hub,"PrimeHub.exe")
-            if not hub_tag:
-                raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
-            if not hub_asset or not hub_asset.get("browser_download_url"):
-                raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
-            hub_update_available = hub_tag.lower() != APP_VERSION.lower()
-            if hub_update_available:
-                self.check_hub_update(hub)
-                # The updater will close this process after the verified EXE is staged.
-                self.set_status("Найдено обновление PrimeHub "+hub_tag+" — подготовка установки...",COLORS["green"])
+            try:
+                sky = self.fetch_json(API_SKY)
+                self.releases["sky"] = sky
+            except Exception as exc:
+                errors.append("SkyRealm: " + str(exc))
+
+            try:
+                mobile = self.fetch_json(API_PRIME_MOBILE)
+                self.releases["mobile"] = mobile
+            except Exception as exc:
+                errors.append("Android: " + str(exc))
+
+            try:
+                apocalypse_pc = self.fetch_latest_apocalypse_release()
+                self.releases["apocalypse_pc"] = apocalypse_pc
+            except Exception as exc:
+                errors.append("Apocalypse: " + str(exc))
+                # Preserve the installed tag when this optional channel is
+                # temporarily unreachable; do not advertise a fake downgrade.
+                installed_tag = str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION)
+                self.releases["apocalypse_pc"] = {"tag_name": installed_tag, "assets": []}
+
+            try:
+                hub = self.fetch_json(API_HUB)
+                self.releases["hub"] = hub
+                hub_tag = str(hub.get("tag_name", "")).strip()
+                hub_asset = self.find_asset(hub, "PrimeHub.exe")
+                if not hub_tag:
+                    raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
+                if not hub_asset or not hub_asset.get("browser_download_url"):
+                    raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
+                if _version_key(hub_tag) > _version_key(APP_VERSION):
+                    self.check_hub_update(hub)
+                    self.set_status("Найдено обновление PrimeHub " + hub_tag + " — подготовка установки...", COLORS["green"])
+                elif _version_key(hub_tag) < _version_key(APP_VERSION):
+                    errors.append("На GitHub опубликована более старая версия PrimeHub (" + hub_tag + ").")
+            except Exception as exc:
+                errors.append("PrimeHub: " + str(exc))
+                hub_tag = ""
+
+            # Refresh any channel that succeeded, even when another channel failed.
+            self.root.after(0, self.refresh_cards)
+            checked = []
+            if hub_tag:
+                checked.append("PrimeHub " + hub_tag)
+            if sky:
+                checked.append("SkyRealm " + str(sky.get("tag_name", "доступен")))
+            if apocalypse_pc:
+                checked.append("Apocalypse " + str(apocalypse_pc.get("tag_name", "доступна")))
+            if mobile:
+                checked.append("Android " + str(mobile.get("tag_name", "доступен")))
+
+            if errors:
+                self.set_status("Проверка завершена частично — проверь детали ниже", COLORS["orange"])
+                self.set_progress(100, "Проверено: " + " • ".join(checked) + " | Не проверено: " + " | ".join(errors)[:900])
             else:
-                self.set_status("PrimeHub актуален ("+hub_tag+"). Каталог игр также обновлён.",COLORS["green"])
-            self.root.after(0,self.refresh_cards)
-            self.set_progress(0,"Проверка завершена • PrimeHub "+hub_tag+" • SkyRealm "+sky.get("tag_name","")+" • Apocalypse "+apocalypse_pc.get("tag_name",""))
-        except Exception as e:
-            self.set_status("Нет соединения с сервером обновлений",COLORS["orange"])
-            self.set_progress(0,"Не удалось проверить обновления: "+str(e))
+                self.set_status("Проверка обновлений завершена", COLORS["green"])
+                self.set_progress(100, "Все каналы проверены: " + " • ".join(checked))
         finally:
-            self.busy=False
+            self.busy = False
 
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
