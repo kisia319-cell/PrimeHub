@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.17"
+APP_VERSION = "v1.2.18"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -151,8 +151,9 @@ class PrimeHub:
         self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.update_banner_button.pack(side="right", padx=12, pady=8)
         self.update_banner.pack_forget()
-        section = tk.Frame(self.home_view, bg=COLORS["bg"])
-        section.pack(fill="x", padx=28, pady=(0, 9))
+        self.library_section = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.library_section.pack(fill="x", padx=28, pady=(0, 9))
+        section = self.library_section
         tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI", 10, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
         self.count_label = tk.Label(section, text="", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"])
         self.count_label.pack(side="right")
@@ -521,7 +522,7 @@ class PrimeHub:
                 self.update_banner_label.configure(text="ДОСТУПНО ОБНОВЛЕНИЕ APOCALYPSE  |  " + installed_apoc_tag + "  →  " + str(apoc_tag) + "   •   Текущая версия сохранится до успешной проверки новой.")
                 self.update_banner_button.configure(text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"))
                 if not self.update_banner.winfo_manager():
-                    self.update_banner.pack(fill="x", before=self.cards.master.winfo_children()[2], padx=28, pady=(0,10))
+                    self.update_banner.pack(fill="x", before=self.library_section, padx=28, pady=(0,10))
                 self.update_banner.lift()
             else:
                 self.update_banner.pack_forget()
