@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.19"
+APP_VERSION = "v1.2.20"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -528,10 +528,8 @@ class PrimeHub:
                 self.update_banner_button.configure(text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"))
                 if not self.update_banner.winfo_manager():
                     self.update_banner.pack(fill="x")
-                self.update_banner_slot.pack(fill="x", padx=28, pady=(0, 10))
             else:
                 self.update_banner.pack_forget()
-                self.update_banner_slot.pack_forget()
             self.card(self.cards,"Apocalypse","SURVIVAL • LAST STAND", "Windows • " + apoc_tag, "Отдельная Windows-сборка Apocalypse. Обновляется только из канала Apocalypse; обычный SkyRealm не затрагивается.", "#873f49", "ОБНОВИТЬ" if apoc_update else ("ЗАПУСТИТЬ" if apoc_installed else "УСТАНОВИТЬ"), (lambda:self.install_game("Apocalypse")) if apoc_update or not apoc_installed else (lambda:self.launch_apocalypse()), apoc_installed)
         else:
             self.count_label.configure(text="1 игра")
