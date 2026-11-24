@@ -52,7 +52,7 @@ def _dpapi_transform(raw: bytes, protect: bool) -> bytes:
 
 def _version_key(value):
     """Compare dotted release versions numerically (v1.2.10 > v1.2.9)."""
-    parts = re.findall(r"\\d+", str(value or ""))
+    parts = re.findall(r"\d+", str(value or ""))
     return tuple(int(part) for part in parts) if parts else ()
 
 
