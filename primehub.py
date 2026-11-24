@@ -786,6 +786,7 @@ class PrimeHub:
             "setlocal",
             "set \"STAGED=" + str(staged) + "\"",
             "set \"CURRENT=" + str(current) + "\"",
+            "set \"WORKDIR=" + str(current.parent) + "\" ",
             "set \"TEMPFILE=" + str(temp_current) + "\"",
             "set \"BACKUP=" + str(backup) + "\"",
             "set \"PARENT_PID=" + str(parent_pid) + "\"",
@@ -804,7 +805,7 @@ class PrimeHub:
             "if exist \"%CURRENT%\" copy /b /y \"%CURRENT%\" \"%BACKUP%\" >nul 2>&1",
             "move /y \"%TEMPFILE%\" \"%CURRENT%\" >nul 2>&1",
             "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry_copy)",
-            "start \"\" /D \"%~dp0\" \"%CURRENT%\"",
+            "start \"\" /D \"%WORKDIR%\" \"%CURRENT%\"",
             "timeout /t 2 /nobreak >nul",
             "del /q \"%STAGED%\" >nul 2>&1",
             'del "%~f0"'
