@@ -1,10 +1,10 @@
-import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html, ctypes, hashlib
+import os, sys, json, time, shutil, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, re, html, ctypes, hashlib, traceback
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.16"
+APP_VERSION = "v1.2.17"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -174,6 +174,8 @@ class PrimeHub:
             "confirm_updates": True,
             "close_hub_after_launch": False,
             "remember_platform": True,
+            "download_unlimited": True,
+            "download_limit_mbps": 2.0,
         }
         stored = self.state.get("primehub_settings", {})
         if not isinstance(stored, dict):
@@ -285,6 +287,25 @@ class PrimeHub:
                 var = tk.BooleanVar(value=bool(values.get(key, False)))
                 variables[key] = var
                 tk.Checkbutton(card, variable=var, text="ВКЛ", onvalue=True, offvalue=False, bg=COLORS["panel"], fg=COLORS["cyan"], selectcolor=COLORS["panel2"], activebackground=COLORS["panel"], activeforeground=COLORS["text"], font=("Segoe UI", 9, "bold")).pack(side="right", padx=18)
+
+            tk.Label(body, text="СКОРОСТЬ ЗАГРУЗКИ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(18, 8))
+            speed_card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+            speed_card.pack(fill="x", pady=5)
+            speed_copy = tk.Frame(speed_card, bg=COLORS["panel"])
+            speed_copy.pack(side="left", fill="x", expand=True, padx=15, pady=12)
+            tk.Label(speed_copy, text="Ограничение скорости", font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+            tk.Label(speed_copy, text="Лимит действует на загрузку игр, APK и обновлений PrimeHub.", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", pady=(3, 0))
+            unlimited_var = tk.BooleanVar(value=bool(values.get("download_unlimited", True)))
+            variables["download_unlimited"] = unlimited_var
+            tk.Checkbutton(speed_copy, variable=unlimited_var, text="Без ограничений", onvalue=True, offvalue=False, bg=COLORS["panel"], fg=COLORS["green"], selectcolor=COLORS["panel2"], activebackground=COLORS["panel"], activeforeground=COLORS["text"], font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(9, 0))
+            speed_controls = tk.Frame(speed_card, bg=COLORS["panel"])
+            speed_controls.pack(side="right", padx=18, pady=12)
+            tk.Label(speed_controls, text="Лимит, МБ/с", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w")
+            speed_var = tk.StringVar(value=str(values.get("download_limit_mbps", 2.0)))
+            variables["download_limit_mbps"] = speed_var
+            speed_entry = tk.Entry(speed_controls, textvariable=speed_var, width=10, bg=COLORS["panel2"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", font=("Segoe UI", 10))
+            speed_entry.pack(anchor="e", pady=(4, 0), ipady=5)
+            tk.Label(speed_controls, text="Примеры: 0.5 • 1 • 2 • 5 • 10", font=("Segoe UI", 7), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="e", pady=(4, 0))
         else:
             values = self.get_apocalypse_settings()
             self._settings_form_values = {}
@@ -341,7 +362,14 @@ class PrimeHub:
             try:
                 if active_tab == "settings":
                     settings = self.get_launcher_settings()
-                    settings.update({k: bool(v.get()) for k, v in variables.items()})
+                    settings.update({k: bool(v.get()) for k, v in variables.items() if k == "check_updates_on_start" or k == "confirm_updates" or k == "close_hub_after_launch" or k == "remember_platform" or k == "download_unlimited"})
+                    try:
+                        limit = float(variables["download_limit_mbps"].get().replace(",", "."))
+                    except (ValueError, AttributeError):
+                        raise ValueError("Укажи скорость числом, например 2 или 0.5 МБ/с.")
+                    if not 0.05 <= limit <= 1000:
+                        raise ValueError("Допустимый лимит: от 0.05 до 1000 МБ/с.")
+                    settings["download_limit_mbps"] = limit
                     self.state["primehub_settings"] = settings
                     self.save_state()
                 else:
@@ -370,6 +398,7 @@ class PrimeHub:
                 self.state["primehub_settings"] = {
                     "check_updates_on_start": True, "confirm_updates": True,
                     "close_hub_after_launch": False, "remember_platform": True,
+                    "download_unlimited": True, "download_limit_mbps": 2.0,
                 }
             else:
                 self.state["apocalypse_settings"] = {
@@ -824,6 +853,14 @@ class PrimeHub:
     def download(self, url, target):
         target.parent.mkdir(parents=True,exist_ok=True)
         req=urllib.request.Request(url,headers={"User-Agent":"PrimeHub/1.0"})
+        download_settings = self.get_launcher_settings()
+        unlimited = bool(download_settings.get("download_unlimited", True))
+        try:
+            limit_mbps = float(download_settings.get("download_limit_mbps", 2.0))
+        except (TypeError, ValueError):
+            limit_mbps = 2.0
+        bytes_per_second = None if unlimited else max(0.05, min(1000.0, limit_mbps)) * 1024 * 1024
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req,timeout=90) as response, open(target,"wb") as out:
                 total=int(response.headers.get("Content-Length",0)); done=0
@@ -831,8 +868,16 @@ class PrimeHub:
                     chunk=response.read(1024*512)
                     if not chunk: break
                     out.write(chunk); done+=len(chunk)
+                    if bytes_per_second:
+                        # Throttle the whole stream, not just the visible progress updates.
+                        expected_elapsed = done / bytes_per_second
+                        remaining = expected_elapsed - (time.monotonic() - started)
+                        while remaining > 0:
+                            time.sleep(min(0.2, remaining))
+                            remaining = expected_elapsed - (time.monotonic() - started)
                     pct=int(done*100/total) if total else 0
-                    self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ")
+                    mode = "без ограничений" if not bytes_per_second else f"лимит {limit_mbps:g} МБ/с"
+                    self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ • {mode}")
                 out.flush()
                 os.fsync(out.fileno())
             if total and done != total:
@@ -1443,8 +1488,46 @@ class PrimeHub:
             messagebox.showerror("Не удалось запустить", str(e))
 
 
+def _write_startup_error_log(error_text):
+    """Persist a startup traceback so launch failures can be diagnosed on the user's PC."""
+    candidates = [ROOT / "logs" / "startup.log", Path(os.environ.get("TEMP", str(Path.home()))) / "PrimeHub-startup.log"]
+    for log_path in candidates:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as stream:
+                stream.write("\n" + "=" * 72 + "\n" + time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + error_text + "\n")
+            return str(log_path)
+        except Exception:
+            continue
+    return "не удалось создать файл журнала"
+
+
+def main():
+    app = None
+    try:
+        ROOT.mkdir(parents=True, exist_ok=True)
+        app = tk.Tk()
+        PrimeHub(app)
+        app.mainloop()
+    except Exception:
+        details = traceback.format_exc()
+        log_path = _write_startup_error_log(details)
+        message = "PrimeHub не удалось запустить.\n\nПодробности записаны сюда:\n" + log_path + "\n\n" + details[-1800:]
+        try:
+            if app is not None and app.winfo_exists():
+                messagebox.showerror("Ошибка запуска PrimeHub", message, parent=app)
+            elif os.name == "nt":
+                ctypes.windll.user32.MessageBoxW(None, message, "Ошибка запуска PrimeHub", 0x10)
+        except Exception:
+            pass
+        raise
+
+
 if __name__=="__main__":
-    ROOT.mkdir(parents=True,exist_ok=True)
-    app=tk.Tk()
-    PrimeHub(app)
-    app.mainloop()
+    if os.name == "nt":
+        try:
+            import multiprocessing
+            multiprocessing.freeze_support()
+        except Exception:
+            pass
+    main()
