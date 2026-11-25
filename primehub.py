@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.22"
+APP_VERSION = "v1.2.23"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -832,7 +832,7 @@ class PrimeHub:
 
             self.root.after(0, self.refresh_cards)
             if errors:
-                self.set_status("Проверка завершена частично — есть проблема с отдельным каналом", COLORS["orange"])
+                self.set_status("Проблема в канале: " + errors[0][:180], COLORS["orange"])
                 self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов")
                                   + " | Ошибки: " + " | ".join(errors)[:900])
             else:
