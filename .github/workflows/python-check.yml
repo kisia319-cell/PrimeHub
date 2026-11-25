@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [feature/primehub-account-apocalypse]
+    branches: [main, feature/primehub-account-apocalypse]
 
 jobs:
   python-syntax:
@@ -25,6 +25,14 @@ jobs:
               "def submit_register(self):",
               "def submit_verify(self):",
               "def submit_login(self):",
+              "def check_updates(self):",
+              "selected_platform = self.platform",
+              'if selected_platform == "PC":',
+              'elif selected_platform == "Android":',
+              "self.fetch_latest_apocalypse_release()",
+              "self.fetch_latest_mobile_release()",
+              "update-check.log",
+              "API_PRIME_MOBILE = \"https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest\"",
               "def launch_apocalypse(self):",
               "def show_settings(self):",
               "def show_apocalypse_settings(self):",
