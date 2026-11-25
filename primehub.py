@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.21"
+APP_VERSION = "v1.2.22"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -13,7 +13,7 @@ AUTH_SESSION = ROOT / "auth-session.bin"
 APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
 API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
-API_PRIME_MOBILE = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
+API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
 API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
@@ -620,27 +620,19 @@ class PrimeHub:
             return json.loads(response.read().decode("utf-8"))
 
     def fetch_latest_mobile_release(self):
-        """Find the newest published mobile release that actually contains an APK."""
-        try:
-            releases = self.fetch_json(API_APOCALYPSE_PC)
-            if isinstance(releases, list):
-                matching = [
-                    item for item in releases
-                    if str(item.get("tag_name", "")).startswith("hub-v")
-                    and not item.get("draft", False)
-                    and any(
-                        str(asset.get("name", "")).lower() in ("app-debug.apk", "primehub-mobile.apk")
-                        for asset in (item.get("assets") or [])
-                    )
-                ]
-                if matching:
-                    return max(
-                        matching,
-                        key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
-                    )
-        except Exception:
-            pass
-        return self.fetch_json(API_PRIME_MOBILE)
+        """Fetch the latest stable mobile APK release without scanning 100 PC/mobile releases."""
+        errors = []
+        for url in (API_PRIME_MOBILE, "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"):
+            try:
+                release = self.fetch_json(url)
+                if not isinstance(release, dict) or not release.get("tag_name"):
+                    raise RuntimeError("GitHub не вернул тег Android-релиза.")
+                if not self.find_asset(release, "app-debug.apk") and not self.find_asset(release, "PrimeHub-Mobile.apk"):
+                    raise RuntimeError("В последнем Android-релизе отсутствует APK.")
+                return release
+            except Exception as exc:
+                errors.append(str(exc))
+        raise RuntimeError("Не удалось проверить Android-релиз: " + " | ".join(errors))
 
     def fetch_latest_apocalypse_release(self):
         """Resolve the newest Windows Apocalypse release, not a permanently pinned tag."""
@@ -755,80 +747,109 @@ class PrimeHub:
     def check_updates(self):
         self.busy = True
         errors = []
+        checked = []
         self.set_status("Проверяем официальные версии...")
+        # Check only channels relevant to the selected platform. Previously the
+        # Windows view also queried the Android APK channel; a temporary APK/API
+        # failure therefore showed a misleading "partially completed" result
+        # even when every PC game was checked successfully.
+        selected_platform = self.platform
         sky = mobile = apocalypse_pc = hub = None
-
-        # Each release channel is independent. A rate limit or missing Apocalypse
-        # release must never abort the ordinary SkyRealm or PrimeHub update checks.
+        hub_tag = ""
         try:
-            try:
-                sky = self.fetch_json(API_SKY)
-                self.releases["sky"] = sky
-                installed_sky = str((self.state.get("SkyRealm") or {}).get("version") or "не установлено")
-                latest_sky = str(sky.get("tag_name") or "")
-                if latest_sky and installed_sky != latest_sky:
-                    self.set_status("Доступно обновление SkyRealm: " + installed_sky + " → " + latest_sky, COLORS["green"])
+            if selected_platform == "PC":
                 try:
-                    ROOT.mkdir(parents=True, exist_ok=True)
-                    with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
-                        log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " SkyRealm installed=" + installed_sky + " latest=" + latest_sky + " installed_files=" + str(self.is_installed("SkyRealm")) + " needs_update=" + str(self.needs_update("SkyRealm", latest_sky)) + " assets=" + ",".join(a.get("name", "") for a in sky.get("assets", [])) + "\\n")
-                except OSError:
-                    pass
-            except Exception as exc:
-                errors.append("SkyRealm: " + str(exc))
+                    sky = self.fetch_json(API_SKY)
+                    if not isinstance(sky, dict) or not sky.get("tag_name"):
+                        raise RuntimeError("GitHub не вернул тег релиза SkyRealm.")
+                    self.releases["sky"] = sky
+                    checked.append("SkyRealm " + str(sky["tag_name"]))
+                    installed_sky = str((self.state.get("SkyRealm") or {}).get("version") or "не установлено")
+                    latest_sky = str(sky.get("tag_name") or "")
+                    if latest_sky and installed_sky.lower() != latest_sky.lower():
+                        self.set_status("Доступно обновление SkyRealm: " + installed_sky + " → " + latest_sky, COLORS["green"])
+                except Exception as exc:
+                    errors.append("SkyRealm: " + str(exc))
 
-            try:
-                mobile = self.fetch_latest_mobile_release()
-                self.releases["mobile"] = mobile
-            except Exception as exc:
-                errors.append("Android: " + str(exc))
+                try:
+                    apocalypse_pc = self.fetch_latest_apocalypse_release()
+                    if not isinstance(apocalypse_pc, dict) or not apocalypse_pc.get("tag_name"):
+                        raise RuntimeError("GitHub не вернул Windows-релиз Apocalypse.")
+                    if not self.find_asset(apocalypse_pc, "SkyRealmApocalypse.exe"):
+                        raise RuntimeError("В Windows-релизе Apocalypse отсутствует SkyRealmApocalypse.exe.")
+                    self.releases["apocalypse_pc"] = apocalypse_pc
+                    checked.append("Apocalypse " + str(apocalypse_pc["tag_name"]))
+                except Exception as exc:
+                    errors.append("Apocalypse: " + str(exc))
+                    installed_tag = str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION)
+                    self.releases["apocalypse_pc"] = {"tag_name": installed_tag, "assets": []}
 
-            try:
-                apocalypse_pc = self.fetch_latest_apocalypse_release()
-                self.releases["apocalypse_pc"] = apocalypse_pc
-            except Exception as exc:
-                errors.append("Apocalypse: " + str(exc))
-                # Preserve the installed tag when this optional channel is
-                # temporarily unreachable; do not advertise a fake downgrade.
-                installed_tag = str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION)
-                self.releases["apocalypse_pc"] = {"tag_name": installed_tag, "assets": []}
+            elif selected_platform == "Android":
+                try:
+                    mobile = self.fetch_latest_mobile_release()
+                    if not isinstance(mobile, dict) or not mobile.get("tag_name"):
+                        raise RuntimeError("GitHub не вернул Android-релиз.")
+                    if not self.find_asset(mobile, "app-debug.apk") and not self.find_asset(mobile, "PrimeHub-Mobile.apk"):
+                        raise RuntimeError("В Android-релизе отсутствует APK.")
+                    self.releases["mobile"] = mobile
+                    checked.append("Android " + str(mobile["tag_name"]))
+                except Exception as exc:
+                    errors.append("Android: " + str(exc))
+            else:
+                errors.append("Неизвестная платформа: " + str(selected_platform))
 
+            # PrimeHub itself is common to both platform views.
             try:
                 hub = self.fetch_json(API_HUB)
-                self.releases["hub"] = hub
+                if not isinstance(hub, dict):
+                    raise RuntimeError("GitHub вернул некорректные данные PrimeHub.")
                 hub_tag = str(hub.get("tag_name", "")).strip()
                 hub_asset = self.find_asset(hub, "PrimeHub.exe")
                 if not hub_tag:
                     raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
                 if not hub_asset or not hub_asset.get("browser_download_url"):
                     raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
+                checked.append("PrimeHub " + hub_tag)
                 if _version_key(hub_tag) > _version_key(APP_VERSION):
                     self.check_hub_update(hub)
-                    self.set_status("Найдено обновление PrimeHub " + hub_tag + " — подготовка установки...", COLORS["green"])
                 elif _version_key(hub_tag) < _version_key(APP_VERSION):
-                    errors.append("На GitHub опубликована более старая версия PrimeHub (" + hub_tag + ").")
+                    # A newer local build than the public release is a warning,
+                    # not a failed check. It can happen during staged publishing.
+                    self.set_status("Установлена тестовая версия PrimeHub " + APP_VERSION, COLORS["muted"])
             except Exception as exc:
                 errors.append("PrimeHub: " + str(exc))
-                hub_tag = ""
 
-            # Refresh any channel that succeeded, even when another channel failed.
+            # Write a useful local diagnostic trail without requiring the user
+            # to copy an error dialog. Keep network exceptions separate by channel.
+            try:
+                ROOT.mkdir(parents=True, exist_ok=True)
+                with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
+                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform)
+                              + " checked=" + " | ".join(checked)
+                              + " errors=" + " | ".join(errors) + "\\n")
+            except OSError:
+                pass
+
             self.root.after(0, self.refresh_cards)
-            checked = []
-            if hub_tag:
-                checked.append("PrimeHub " + hub_tag)
-            if sky:
-                checked.append("SkyRealm " + str(sky.get("tag_name", "доступен")))
-            if apocalypse_pc:
-                checked.append("Apocalypse " + str(apocalypse_pc.get("tag_name", "доступна")))
-            if mobile:
-                checked.append("Android " + str(mobile.get("tag_name", "доступен")))
-
             if errors:
-                self.set_status("Проверка завершена частично — проверь детали ниже", COLORS["orange"])
-                self.set_progress(100, "Проверено: " + " • ".join(checked) + " | Не проверено: " + " | ".join(errors)[:900])
+                self.set_status("Проверка завершена частично — есть проблема с отдельным каналом", COLORS["orange"])
+                self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов")
+                                  + " | Ошибки: " + " | ".join(errors)[:900])
             else:
                 self.set_status("Проверка обновлений завершена", COLORS["green"])
-                self.set_progress(100, "Все каналы проверены: " + " • ".join(checked))
+                self.set_progress(100, "Все каналы " + ("ПК" if selected_platform == "PC" else "Android")
+                                  + " проверены: " + " • ".join(checked))
+        except Exception as exc:
+            # Never leave the busy flag stuck if a UI callback or unexpected
+            # response shape fails; surface the error in the local log/status.
+            try:
+                ROOT.mkdir(parents=True, exist_ok=True)
+                with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
+                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " FATAL " + repr(exc) + "\\n")
+            except OSError:
+                pass
+            self.set_status("Ошибка проверки обновлений: " + str(exc), COLORS["orange"])
+            self.set_progress(100, "Проверка прервана: " + str(exc)[:900])
         finally:
             self.busy = False
 
