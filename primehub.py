@@ -826,7 +826,7 @@ class PrimeHub:
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
                     log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform)
                               + " checked=" + " | ".join(checked)
-                              + " errors=" + " | ".join(errors) + "\\n")
+                              + " errors=" + " | ".join(errors) + "\n")
             except OSError:
                 pass
 
@@ -845,7 +845,7 @@ class PrimeHub:
             try:
                 ROOT.mkdir(parents=True, exist_ok=True)
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
-                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " FATAL " + repr(exc) + "\\n")
+                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " FATAL " + repr(exc) + "\n")
             except OSError:
                 pass
             self.set_status("Ошибка проверки обновлений: " + str(exc), COLORS["orange"])
