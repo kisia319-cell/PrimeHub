@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.20"
+APP_VERSION = "v1.2.21"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -553,48 +553,94 @@ class PrimeHub:
         self.root.after(0, apply)
 
     def fetch_json(self, url):
-        # Prefer public GitHub release pages over the unauthenticated REST API.
-        # The REST API is rate-limited (403) and is frequently unavailable to users
-        # behind shared or regional NAT addresses.
+        """Fetch a release through GitHub HTML, then fall back to its stable REST API."""
         parsed = urllib.parse.urlsplit(url)
         release_prefix = "/releases/"
         if parsed.netloc.lower() == "github.com" and release_prefix in parsed.path:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.1"})
-            with urllib.request.urlopen(req, timeout=30) as response:
-                page = response.read().decode("utf-8", errors="replace")
-                final_url = response.geturl()
-
-            final_path = urllib.parse.urlsplit(final_url).path
-            tag_match = re.search(r"/releases/tag/([^/?#]+)", final_path)
-            if tag_match:
-                tag = urllib.parse.unquote(tag_match.group(1))
-            else:
-                requested_tag = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
-                if not requested_tag:
-                    raise RuntimeError("GitHub не вернул страницу последнего релиза: " + url)
-                tag = urllib.parse.unquote(requested_tag.group(1))
-
             repo_path = parsed.path.split(release_prefix, 1)[0]
-            assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
-            assets_req = urllib.request.Request(assets_page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.1"})
-            with urllib.request.urlopen(assets_req, timeout=30) as asset_response:
-                assets_page = asset_response.read().decode("utf-8", errors="replace")
+            requested_tag = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
+            html_error = None
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                with urllib.request.urlopen(req, timeout=20) as response:
+                    page = response.read().decode("utf-8", errors="replace")
+                    final_url = response.geturl()
 
-            assets = []
-            seen = set()
-            for match in re.finditer(r'href="([^"]*/releases/download/[^"]+)"', assets_page, re.I):
-                href = html.unescape(match.group(1))
-                asset_url = urllib.parse.urljoin("https://github.com", href)
-                asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
-                if asset_name and asset_name not in seen:
-                    seen.add(asset_name)
-                    assets.append({"name": asset_name, "browser_download_url": asset_url})
+                final_path = urllib.parse.urlsplit(final_url).path
+                tag_match = re.search(r"/releases/tag/([^/?#]+)", final_path)
+                if tag_match:
+                    tag = urllib.parse.unquote(tag_match.group(1))
+                elif requested_tag:
+                    tag = urllib.parse.unquote(requested_tag.group(1))
+                else:
+                    raise RuntimeError("GitHub не вернул номер последнего релиза.")
 
-            return {"tag_name": tag, "html_url": final_url, "assets": assets}
+                assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
+                assets_req = urllib.request.Request(assets_page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                with urllib.request.urlopen(assets_req, timeout=20) as asset_response:
+                    assets_page = asset_response.read().decode("utf-8", errors="replace")
+
+                assets = []
+                seen = set()
+                for match in re.finditer(r"""href=["']([^"']*/releases/download/[^"']+)["']""", assets_page, re.I):
+                    href = html.unescape(match.group(1))
+                    asset_url = urllib.parse.urljoin("https://github.com", href)
+                    asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
+                    if asset_name and asset_name not in seen:
+                        seen.add(asset_name)
+                        assets.append({"name": asset_name, "browser_download_url": asset_url})
+                if assets:
+                    return {"tag_name": tag, "html_url": final_url, "assets": assets}
+                html_error = RuntimeError("Страница релиза GitHub не вернула список файлов.")
+            except Exception as exc:
+                html_error = exc
+
+            # HTML/expanded-assets pages can be blocked by regional proxies or
+            # return changed markup. REST exposes the same metadata reliably.
+            api_base = "https://api.github.com/repos" + repo_path
+            if requested_tag:
+                api_url = api_base + "/releases/tags/" + urllib.parse.quote(urllib.parse.unquote(requested_tag.group(1)), safe="")
+            else:
+                api_url = api_base + "/releases/latest"
+            try:
+                req = urllib.request.Request(api_url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=20) as response:
+                    release = json.loads(response.read().decode("utf-8"))
+                if not release.get("tag_name"):
+                    raise RuntimeError("GitHub API не вернул номер версии.")
+                return release
+            except Exception as api_error:
+                raise RuntimeError(
+                    "Не удалось получить релиз GitHub. Страница: " + str(html_error)
+                    + "; API: " + str(api_error)
+                ) from api_error
 
         req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=25) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def fetch_latest_mobile_release(self):
+        """Find the newest published mobile release that actually contains an APK."""
+        try:
+            releases = self.fetch_json(API_APOCALYPSE_PC)
+            if isinstance(releases, list):
+                matching = [
+                    item for item in releases
+                    if str(item.get("tag_name", "")).startswith("hub-v")
+                    and not item.get("draft", False)
+                    and any(
+                        str(asset.get("name", "")).lower() in ("app-debug.apk", "primehub-mobile.apk")
+                        for asset in (item.get("assets") or [])
+                    )
+                ]
+                if matching:
+                    return max(
+                        matching,
+                        key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
+                    )
+        except Exception:
+            pass
+        return self.fetch_json(API_PRIME_MOBILE)
 
     def fetch_latest_apocalypse_release(self):
         """Resolve the newest Windows Apocalypse release, not a permanently pinned tag."""
@@ -732,7 +778,7 @@ class PrimeHub:
                 errors.append("SkyRealm: " + str(exc))
 
             try:
-                mobile = self.fetch_json(API_PRIME_MOBILE)
+                mobile = self.fetch_latest_mobile_release()
                 self.releases["mobile"] = mobile
             except Exception as exc:
                 errors.append("Android: " + str(exc))
