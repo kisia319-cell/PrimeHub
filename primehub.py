@@ -865,9 +865,19 @@ class PrimeHub:
             except Exception as api_error:
                 raise RuntimeError("Не удалось получить релиз GitHub. Страница: " + str(html_error) + "; API: " + str(api_error)) from api_error
         req = urllib.request.Request(url, headers=HEADERS)
-        raw, _ = self._read_response(req)
         try:
+            raw, _ = self._read_response(req)
             return json.loads(raw.decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError) as api_error:
+            # GitHub's public HTML release page is a useful second route when
+            # the REST endpoint is rate-limited or filtered by a regional proxy.
+            if parsed.netloc.lower() == "api.github.com" and parsed.path.endswith("/releases/latest"):
+                repo_path = parsed.path.split("/repos/", 1)[-1].rsplit("/releases/latest", 1)[0]
+                try:
+                    return self.fetch_json("https://github.com/" + repo_path + "/releases/latest")
+                except Exception as html_error:
+                    raise RuntimeError("GitHub API: " + str(api_error) + "; HTML fallback: " + str(html_error)) from html_error
+            raise RuntimeError("Не удалось прочитать канал GitHub: " + str(api_error)) from api_error
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError("GitHub вернул некорректный JSON для канала: " + str(exc)) from exc
     def fetch_latest_mobile_release(self):
