@@ -1094,7 +1094,7 @@ class PrimeHub:
         staged = update_dir / "PrimeHub.next.exe"
         script = update_dir / "apply-hub-update.cmd"
         self.set_status("Доступно обновление PrimeHub — загружаем...")
-        self.download(asset["browser_download_url"], staged)
+        self.download_asset(asset, staged)
         # Refuse to replace the running Hub with a truncated/non-Windows download.
         if not staged.is_file() or staged.stat().st_size < 1_000_000:
             raise RuntimeError("Обновление PrimeHub скачалось не полностью. Старую версию оставили без изменений.")
@@ -1146,43 +1146,76 @@ class PrimeHub:
         return None
 
     def download(self, url, target):
-        target.parent.mkdir(parents=True,exist_ok=True)
-        req=urllib.request.Request(url,headers={"User-Agent":"PrimeHub/1.0"})
-        download_settings = self.get_launcher_settings()
-        unlimited = bool(download_settings.get("download_unlimited", True))
-        try:
-            limit_mbps = float(download_settings.get("download_limit_mbps", 2.0))
-        except (TypeError, ValueError):
-            limit_mbps = 2.0
+        target.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "PrimeHub/1.3", "Accept": "*/*"})
+        settings = self.get_launcher_settings()
+        retries = int(settings.get("network_retries", 2))
+        timeout = int(settings.get("network_timeout_seconds", 35))
+        unlimited = bool(settings.get("download_unlimited", True))
+        limit_mbps = float(settings.get("download_limit_mbps", 2.0))
         bytes_per_second = None if unlimited else max(0.05, min(1000.0, limit_mbps)) * 1024 * 1024
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(req,timeout=90) as response, open(target,"wb") as out:
-                total=int(response.headers.get("Content-Length",0)); done=0
-                while True:
-                    chunk=response.read(1024*512)
-                    if not chunk: break
-                    out.write(chunk); done+=len(chunk)
-                    if bytes_per_second:
-                        # Throttle the whole stream, not just the visible progress updates.
-                        expected_elapsed = done / bytes_per_second
-                        remaining = expected_elapsed - (time.monotonic() - started)
-                        while remaining > 0:
-                            time.sleep(min(0.2, remaining))
+        last_error = None
+        for attempt in range(retries + 1):
+            started, done, total = time.monotonic(), 0, 0
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response, target.open("wb") as out:
+                    total = int(response.headers.get("Content-Length", 0) or 0)
+                    while True:
+                        chunk = response.read(1024 * 512)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if bytes_per_second:
+                            expected_elapsed = done / bytes_per_second
                             remaining = expected_elapsed - (time.monotonic() - started)
-                    pct=int(done*100/total) if total else 0
-                    mode = "без ограничений" if not bytes_per_second else f"лимит {limit_mbps:g} МБ/с"
-                    self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ • {mode}")
-                out.flush()
-                os.fsync(out.fileno())
-            if total and done != total:
-                raise RuntimeError(f"Загрузка оборвалась: получено {done} из {total} байт.")
-        except Exception:
-            try: target.unlink(missing_ok=True)
-            except Exception: pass
-            raise
-        return target
+                            while remaining > 0:
+                                time.sleep(min(0.2, remaining))
+                                remaining = expected_elapsed - (time.monotonic() - started)
+                        pct = int(done * 100 / total) if total else 0
+                        mode = "без ограничений" if not bytes_per_second else f"лимит {limit_mbps:g} МБ/с"
+                        self.set_progress(pct, f"Загрузка: {target.name} • {done // 1048576} МБ • {mode}")
+                    out.flush()
+                    os.fsync(out.fileno())
+                if total and done != total:
+                    raise RuntimeError(f"Загрузка оборвалась: получено {done} из {total} байт.")
+                if done == 0:
+                    raise RuntimeError("Сервер вернул пустой файл: " + target.name)
+                return target
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                retryable = exc.code in (408, 425, 429, 500, 502, 503, 504)
+            except Exception as exc:
+                last_error, retryable = exc, True
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if not retryable or attempt >= retries:
+                raise RuntimeError("Не удалось загрузить " + target.name + ": " + str(last_error)) from last_error
+            self.set_status("Повтор загрузки " + target.name + " (" + str(attempt + 1) + "/" + str(retries) + ")", COLORS["orange"])
+            time.sleep(min(4.0, 0.75 * (2 ** attempt)))
+        raise RuntimeError("Загрузка не завершилась: " + str(last_error))
 
+    def download_asset(self, asset, target):
+        url = str((asset or {}).get("browser_download_url") or "")
+        if not url:
+            raise RuntimeError("GitHub не предоставил ссылку на файл " + target.name + ".")
+        self.download(url, target)
+        expected_size = int((asset or {}).get("size") or 0)
+        if expected_size and target.stat().st_size != expected_size:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("Размер " + target.name + " не совпадает с опубликованным размером GitHub.")
+        digest = str((asset or {}).get("digest") or "").lower()
+        if digest.startswith("sha256:"):
+            actual = hashlib.sha256()
+            with target.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    actual.update(chunk)
+            if actual.hexdigest().lower() != digest.split(":", 1)[1]:
+                target.unlink(missing_ok=True)
+                raise RuntimeError("SHA-256 " + target.name + " не совпадает с контрольной суммой GitHub.")
+        return target
     def install_game(self, game):
         if self.busy:
             return
@@ -1202,6 +1235,7 @@ class PrimeHub:
             )
             if not accepted:
                 return
+        self.busy = True
         threading.Thread(target=self._install_game, args=(game,), daemon=True).start()
 
     def _install_updates_sequential(self, games):
@@ -1256,9 +1290,9 @@ class PrimeHub:
         game_archive = cache / (game + "_Game_" + safe_tag + ".zip")
         runtime_archive = cache / (game + "_Windows_" + safe_tag + ".zip")
         self.set_status("Скачиваем отдельное издание " + game + "...")
-        self.download(game_asset["browser_download_url"], game_archive)
+        self.download_asset(game_asset, game_archive)
         self.set_progress(0, "Загружаем отдельный запускатель " + game + "...")
-        self.download(runtime_asset["browser_download_url"], runtime_archive)
+        self.download_asset(runtime_asset, runtime_archive)
 
         staging_root = ROOT / "staging" / (game + "-install")
         if staging_root.exists():
@@ -1320,7 +1354,7 @@ class PrimeHub:
             if moved_old and backup.exists() and not dest.exists():
                 backup.rename(dest)
             raise
-        if backup.exists():
+        if backup.exists() and not self.get_launcher_settings().get("keep_backups", True):
             shutil.rmtree(backup, ignore_errors=True)
         self.state[game] = {
             "version": rel.get("tag_name"), "game_version": game_version,
@@ -1345,7 +1379,7 @@ class PrimeHub:
         staging.mkdir(parents=True, exist_ok=True)
         exe = staging / "SkyRealmApocalypse.exe"
         self.set_status("Скачиваем мобильную Apocalypse для Windows...")
-        self.download(asset["browser_download_url"], exe)
+        self.download_asset(asset, exe)
         if not exe.is_file() or exe.stat().st_size < 1_000_000:
             raise RuntimeError("SkyRealmApocalypse.exe скачался не полностью.")
         with exe.open("rb") as stream:
@@ -1378,7 +1412,7 @@ class PrimeHub:
             if moved_old and backup.exists() and not dest.exists():
                 backup.rename(dest)
             raise
-        if backup.exists():
+        if backup.exists() and not self.get_launcher_settings().get("keep_backups", True):
             shutil.rmtree(backup, ignore_errors=True)
         self.state["Apocalypse"] = {
             "version": tag, "game_version": "mobile-apocalypse",
@@ -1405,7 +1439,7 @@ class PrimeHub:
                 dest.mkdir(parents=True,exist_ok=True)
                 target=dest/"PrimeLauncher.exe"
                 self.set_status("Устанавливаем PrimeLauncher...")
-                self.download(asset["browser_download_url"],target)
+                self.download_asset(asset, target)
                 with target.open("rb") as stream:
                     if stream.read(2) != b"MZ" or target.stat().st_size < 1_000_000:
                         target.unlink(missing_ok=True)
@@ -1416,18 +1450,21 @@ class PrimeHub:
                 self.set_progress(100,"PrimeLauncher установлен.")
             else:
                 rel=self.releases.get("mobile") or self.fetch_json(API_PRIME_MOBILE)
-                asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
+                asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeHub-Mobile.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
                 if not asset: raise RuntimeError("В последнем мобильном релизе не найден APK")
                 dest=self.installed_dir("PrimeLauncher Mobile")
                 dest.mkdir(parents=True,exist_ok=True)
                 target=dest/"SkyRealm-Hub.apk"
                 self.set_status("Скачиваем Android APK...")
-                self.download(asset["browser_download_url"],target)
+                self.download_asset(asset, target)
                 self.state["PrimeLauncher Mobile"]={"version":rel.get("tag_name"),"installed":int(time.time())}
                 self.save_state()
                 self.set_status("APK скачан",COLORS["green"])
                 self.set_progress(100,"SkyRealm Hub APK сохранён в "+str(target)+" — открой его на Android для установки.")
-            self.root.after(0,self.refresh_cards)
+            if self.get_launcher_settings().get("clear_cache_after_install", False):
+                shutil.rmtree(ROOT / "cache", ignore_errors=True)
+            self.root.after(0, self.refresh_cards)
+            self.root.after(0, self._refresh_channels_if_open)
         except Exception as e:
             self.set_status("Не удалось завершить установку",COLORS["orange"])
             self.set_progress(0,"Ошибка загрузки: " + str(e))
