@@ -767,28 +767,68 @@ class PrimeHub:
         self.root.update_idletasks()
 
     def set_status(self, msg, color=None):
-        self.root.after(0, lambda:self.status.configure(text="● "+msg, fg=color or COLORS["cyan"]))
-
+        def apply():
+            try:
+                if self.root.winfo_exists() and hasattr(self, "status") and self.status.winfo_exists():
+                    self.status.configure(text="● " + str(msg), fg=color or COLORS["cyan"])
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            pass
     def set_progress(self, value, msg):
         def apply():
-            self.progress["value"] = value
-            self.progress_text.configure(text=msg)
-        self.root.after(0, apply)
+            try:
+                if self.root.winfo_exists() and hasattr(self, "progress"):
+                    self.progress["value"] = max(0, min(100, int(value)))
+                    self.progress_text.configure(text=str(msg))
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            pass
+    def _read_response(self, request, timeout=None):
+        """Retry temporary network and GitHub rate-limit errors with bounded backoff."""
+        settings = self.get_launcher_settings()
+        timeout = int(timeout or settings.get("network_timeout_seconds", 35))
+        retries = int(settings.get("network_retries", 2))
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read(), response.geturl()
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                remaining = (exc.headers or {}).get("X-RateLimit-Remaining", "")
+                retryable = exc.code in (408, 425, 429, 500, 502, 503, 504) or (exc.code == 403 and remaining == "0")
+                if not retryable or attempt >= retries:
+                    raise
+                retry_after = (exc.headers or {}).get("Retry-After", "")
+                try:
+                    delay = max(0.5, min(8.0, float(retry_after)))
+                except (TypeError, ValueError):
+                    delay = min(4.0, 0.75 * (2 ** attempt))
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+                last_error = exc
+                if attempt >= retries:
+                    raise
+                delay = min(4.0, 0.75 * (2 ** attempt))
+            self.set_status("Повтор соединения с GitHub: " + str(attempt + 1) + "/" + str(retries))
+            time.sleep(delay)
+        raise RuntimeError("Сетевой запрос не выполнен: " + str(last_error))
 
     def fetch_json(self, url):
-        """Fetch a release through GitHub HTML, then fall back to its stable REST API."""
+        """Read GitHub release metadata through REST; tolerate temporary HTML and API failures."""
         parsed = urllib.parse.urlsplit(url)
-        release_prefix = "/releases/"
-        if parsed.netloc.lower() == "github.com" and release_prefix in parsed.path:
-            repo_path = parsed.path.split(release_prefix, 1)[0]
+        if parsed.netloc.lower() == "github.com" and "/releases/" in parsed.path:
+            repo_path = parsed.path.split("/releases/", 1)[0]
             requested_tag = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
             html_error = None
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
-                with urllib.request.urlopen(req, timeout=20) as response:
-                    page = response.read().decode("utf-8", errors="replace")
-                    final_url = response.geturl()
-
+                _, final_url = self._read_response(req)
                 final_path = urllib.parse.urlsplit(final_url).path
                 tag_match = re.search(r"/releases/tag/([^/?#]+)", final_path)
                 if tag_match:
@@ -797,274 +837,201 @@ class PrimeHub:
                     tag = urllib.parse.unquote(requested_tag.group(1))
                 else:
                     raise RuntimeError("GitHub не вернул номер последнего релиза.")
-
-                assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
-                assets_req = urllib.request.Request(assets_page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
-                with urllib.request.urlopen(assets_req, timeout=20) as asset_response:
-                    assets_page = asset_response.read().decode("utf-8", errors="replace")
-
-                assets = []
-                seen = set()
+                assets_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
+                assets_req = urllib.request.Request(assets_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                assets_bytes, _ = self._read_response(assets_req)
+                assets_page = assets_bytes.decode("utf-8", errors="replace")
+                assets, seen = [], set()
                 for match in re.finditer(r"""href=["']([^"']*/releases/download/[^"']+)["']""", assets_page, re.I):
-                    href = html.unescape(match.group(1))
-                    asset_url = urllib.parse.urljoin("https://github.com", href)
-                    asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
-                    if asset_name and asset_name not in seen:
-                        seen.add(asset_name)
-                        assets.append({"name": asset_name, "browser_download_url": asset_url})
+                    asset_url = urllib.parse.urljoin("https://github.com", html.unescape(match.group(1)))
+                    name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
+                    if name and name not in seen:
+                        seen.add(name)
+                        assets.append({"name": name, "browser_download_url": asset_url})
                 if assets:
                     return {"tag_name": tag, "html_url": final_url, "assets": assets}
                 html_error = RuntimeError("Страница релиза GitHub не вернула список файлов.")
             except Exception as exc:
                 html_error = exc
-
-            # HTML/expanded-assets pages can be blocked by regional proxies or
-            # return changed markup. REST exposes the same metadata reliably.
             api_base = "https://api.github.com/repos" + repo_path
-            if requested_tag:
-                api_url = api_base + "/releases/tags/" + urllib.parse.quote(urllib.parse.unquote(requested_tag.group(1)), safe="")
-            else:
-                api_url = api_base + "/releases/latest"
+            api_url = api_base + ("/releases/tags/" + urllib.parse.quote(urllib.parse.unquote(requested_tag.group(1)), safe="") if requested_tag else "/releases/latest")
             try:
                 req = urllib.request.Request(api_url, headers=HEADERS)
-                with urllib.request.urlopen(req, timeout=20) as response:
-                    release = json.loads(response.read().decode("utf-8"))
-                if not release.get("tag_name"):
+                raw, _ = self._read_response(req)
+                release = json.loads(raw.decode("utf-8"))
+                if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub API не вернул номер версии.")
                 return release
             except Exception as api_error:
-                raise RuntimeError(
-                    "Не удалось получить релиз GitHub. Страница: " + str(html_error)
-                    + "; API: " + str(api_error)
-                ) from api_error
-
+                raise RuntimeError("Не удалось получить релиз GitHub. Страница: " + str(html_error) + "; API: " + str(api_error)) from api_error
         req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=25) as response:
-            return json.loads(response.read().decode("utf-8"))
-
+        raw, _ = self._read_response(req)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("GitHub вернул некорректный JSON для канала: " + str(exc)) from exc
     def fetch_latest_mobile_release(self):
-        """Fetch the latest stable mobile APK release without scanning 100 PC/mobile releases."""
+        """Resolve a published Android APK release, validating the actual asset."""
         errors = []
         for url in (API_PRIME_MOBILE, "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"):
             try:
                 release = self.fetch_json(url)
                 if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub не вернул тег Android-релиза.")
-                if not self.find_asset(release, "app-debug.apk") and not self.find_asset(release, "PrimeHub-Mobile.apk"):
-                    raise RuntimeError("В последнем Android-релизе отсутствует APK.")
+                asset = self.find_asset(release, "app-debug.apk") or self.find_asset(release, "PrimeHub-Mobile.apk")
+                if not asset or not asset.get("browser_download_url"):
+                    raise RuntimeError("В Android-релизе отсутствует скачиваемый APK.")
                 return release
             except Exception as exc:
                 errors.append(str(exc))
         raise RuntimeError("Не удалось проверить Android-релиз: " + " | ".join(errors))
-
     def fetch_latest_apocalypse_release(self):
-        """Resolve the newest Windows Apocalypse release, not a permanently pinned tag."""
-        releases = None
-        try:
-            response = self.fetch_json(API_APOCALYPSE_PC)
-            if isinstance(response, list):
-                releases = response
-        except Exception:
-            # GitHub REST can be rate-limited on shared/regional networks.
-            releases = None
-
+        """Find the newest non-draft Windows Apocalypse release with a real EXE asset."""
+        api_error, releases = None, []
+        for page in range(1, 4):
+            try:
+                batch = self.fetch_json(API_APOCALYPSE_PC + "&page=" + str(page))
+                if not isinstance(batch, list):
+                    raise RuntimeError("GitHub вернул не список релизов Apocalypse.")
+                releases.extend(item for item in batch if isinstance(item, dict))
+                if len(batch) < 100:
+                    break
+            except Exception as exc:
+                api_error = exc
+                break
         matching = [
-            item for item in (releases or [])
+            item for item in releases
             if str(item.get("tag_name", "")).startswith("apocalypse-pc-v")
             and not item.get("draft", False)
-            and any(
-                str(asset.get("name", "")).lower() == "skyrealmapocalypse.exe"
-                for asset in (item.get("assets") or [])
-            )
+            and any(str(asset.get("name", "")).lower() == "skyrealmapocalypse.exe" and asset.get("browser_download_url") for asset in (item.get("assets") or []))
         ]
         if matching:
-            release = max(
-                matching,
-                key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
-            )
-            return {
-                "tag_name": release.get("tag_name", ""),
-                "html_url": release.get("html_url", ""),
-                "assets": [
-                    {
-                        "name": asset.get("name", ""),
-                        "browser_download_url": asset.get("browser_download_url", ""),
-                        "updated_at": asset.get("updated_at"),
-                        "id": asset.get("id"),
-                        "digest": asset.get("digest"),
-                        "size": asset.get("size"),
-                    }
-                    for asset in release.get("assets", [])
-                ],
-            }
-
-        # Fallback 1: GitHub's public Atom feed. It exposes release tags without
-        # depending on the changing HTML markup of the releases listing.
-        tags = set()
-        feed_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom"
+            return max(matching, key=lambda item: _version_key(item.get("tag_name")))
+        tags, fallback_errors = set(), []
         try:
-            feed_request = urllib.request.Request(
-                feed_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2", "Accept": "application/atom+xml"}
-            )
-            with urllib.request.urlopen(feed_request, timeout=25) as response:
-                feed = response.read().decode("utf-8", errors="replace")
-            tags.update(re.findall(
-                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                html.unescape(feed),
-                re.I,
-            ))
-        except Exception:
-            pass
-
-        # Fallback 2: releases page. Accept relative and absolute hrefs because
-        # GitHub changes the markup between desktop and cached responses.
+            req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3", "Accept": "application/atom+xml"})
+            raw, _ = self._read_response(req)
+            tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', html.unescape(raw.decode("utf-8", errors="replace")), re.I))
+        except Exception as exc:
+            fallback_errors.append("Atom: " + str(exc))
         if not tags:
-            page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc"
-            request = urllib.request.Request(
-                page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2"}
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                page = response.read().decode("utf-8", errors="replace")
-            page = html.unescape(page)
-            tags.update(re.findall(
-                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                page,
-                re.I,
-            ))
-            # Some GitHub responses HTML-escape slashes or include a URL prefix
-            # in embedded JSON rather than a plain href attribute.
-            tags.update(re.findall(
-                r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                page,
-                re.I,
-            ))
-        if not tags:
-            raise RuntimeError(
-                "GitHub не вернул список Windows-релизов Apocalypse. "
-                "Проверь подключение к github.com и повтори проверку."
-            )
-
-        # A matching tag is not enough: some Apocalypse prereleases/metadata
-        # entries do not contain the Windows executable. Try newest tags first
-        # and select only a release that actually publishes the required EXE.
-        ordered_tags = sorted(
-            tags,
-            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag)),
-            reverse=True,
-        )
-        for candidate_tag in ordered_tags:
-            release = self.fetch_json(
-                "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
-                + urllib.parse.quote(candidate_tag, safe="")
-            )
-            if self.find_asset(release, "SkyRealmApocalypse.exe"):
-                return release
-        raise RuntimeError(
-            "Найдены версии Apocalypse, но ни в одной не опубликован SkyRealmApocalypse.exe."
-        )
-
+            try:
+                req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                raw, _ = self._read_response(req)
+                page = html.unescape(raw.decode("utf-8", errors="replace"))
+                tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
+                tags.update(re.findall(r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
+            except Exception as exc:
+                fallback_errors.append("Страница релизов: " + str(exc))
+        for tag in sorted(tags, key=_version_key, reverse=True):
+            try:
+                release = self.fetch_json("https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/tags/" + urllib.parse.quote(tag, safe=""))
+                if isinstance(release, dict) and self.find_asset(release, "SkyRealmApocalypse.exe"):
+                    return release
+            except Exception as exc:
+                fallback_errors.append(tag + ": " + str(exc))
+        detail = ("API: " + str(api_error) + ". ") if api_error else ""
+        detail += " ".join(fallback_errors)
+        raise RuntimeError("Не удалось получить опубликованный Windows-релиз Apocalypse с файлом SkyRealmApocalypse.exe. " + detail[:900])
     def check_updates_async(self):
-        if self.busy: return
-        threading.Thread(target=self.check_updates,daemon=True).start()
-
+        if self.busy:
+            self.set_status("Дождись завершения текущей операции", COLORS["orange"])
+            return
+        self.busy = True
+        threading.Thread(target=self.check_updates, daemon=True).start()
     def check_updates(self):
         self.busy = True
-        errors = []
-        checked = []
-        self.set_status("Проверяем официальные версии...")
-        # Check only channels relevant to the selected platform. Previously the
-        # Windows view also queried the Android APK channel; a temporary APK/API
-        # failure therefore showed a misleading "partially completed" result
-        # even when every PC game was checked successfully.
+        errors, checked, skipped = [], [], []
         selected_platform = self.platform
-        sky = mobile = apocalypse_pc = hub = None
-        hub_tag = ""
+        settings = self.get_launcher_settings()
+        self.set_status("Проверяем официальные каналы " + selected_platform + "...")
+        def run_channel(key, label, enabled, callback):
+            if not enabled:
+                self._record_channel_status(key, False, "Проверка отключена в настройках.")
+                skipped.append(label)
+                return None
+            try:
+                result = callback()
+                tag = str(result.get("tag_name") or "") if isinstance(result, dict) else ""
+                self._record_channel_status(key, True, "Канал доступен. Опубликованный релиз: " + tag, tag)
+                checked.append(label + " " + tag)
+                return result
+            except Exception as exc:
+                self._record_channel_status(key, False, str(exc))
+                errors.append(label + ": " + str(exc))
+                return None
         try:
             if selected_platform == "PC":
-                try:
-                    sky = self.fetch_json(API_SKY)
-                    if not isinstance(sky, dict) or not sky.get("tag_name"):
+                def get_sky_release():
+                    release = self.fetch_json(API_SKY)
+                    if not isinstance(release, dict) or not release.get("tag_name"):
                         raise RuntimeError("GitHub не вернул тег релиза SkyRealm.")
-                    self.releases["sky"] = sky
-                    checked.append("SkyRealm " + str(sky["tag_name"]))
-                    installed_sky = str((self.state.get("SkyRealm") or {}).get("version") or "не установлено")
-                    latest_sky = str(sky.get("tag_name") or "")
-                    if latest_sky and installed_sky.lower() != latest_sky.lower():
-                        self.set_status("Доступно обновление SkyRealm: " + installed_sky + " → " + latest_sky, COLORS["green"])
-                except Exception as exc:
-                    errors.append("SkyRealm: " + str(exc))
-
-                try:
-                    apocalypse_pc = self.fetch_latest_apocalypse_release()
-                    if not isinstance(apocalypse_pc, dict) or not apocalypse_pc.get("tag_name"):
-                        raise RuntimeError("GitHub не вернул Windows-релиз Apocalypse.")
-                    if not self.find_asset(apocalypse_pc, "SkyRealmApocalypse.exe"):
-                        raise RuntimeError("В Windows-релизе Apocalypse отсутствует SkyRealmApocalypse.exe.")
-                    self.releases["apocalypse_pc"] = apocalypse_pc
-                    checked.append("Apocalypse " + str(apocalypse_pc["tag_name"]))
-                except Exception as exc:
-                    errors.append("Apocalypse: " + str(exc))
-                    installed_tag = str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION)
-                    self.releases["apocalypse_pc"] = {"tag_name": installed_tag, "assets": []}
-
+                    missing = [name for name in ("SkyRealm_Game.zip", "SkyRealm_Windows.zip", "PrimeLauncher.exe") if not self.find_asset(release, name)]
+                    if missing:
+                        raise RuntimeError("В релизе " + str(release["tag_name"]) + " отсутствуют файлы: " + ", ".join(missing))
+                    return release
+                sky = run_channel("skyrealm", "SkyRealm PC", settings.get("check_skyrealm_channel", True), get_sky_release)
+                self.releases["sky"] = sky or {}
+                apocalypse = run_channel("apocalypse_pc", "Apocalypse PC", settings.get("check_apocalypse_channel", True), self.fetch_latest_apocalypse_release)
+                if apocalypse and self.find_asset(apocalypse, "SkyRealmApocalypse.exe"):
+                    self.releases["apocalypse_pc"] = apocalypse
+                else:
+                    if apocalypse:
+                        errors.append("Apocalypse PC: в релизе отсутствует SkyRealmApocalypse.exe.")
+                        self._record_channel_status("apocalypse_pc", False, "В релизе отсутствует SkyRealmApocalypse.exe.")
+                    self.releases["apocalypse_pc"] = {"tag_name": str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION), "assets": []}
             elif selected_platform == "Android":
-                try:
-                    mobile = self.fetch_latest_mobile_release()
-                    if not isinstance(mobile, dict) or not mobile.get("tag_name"):
-                        raise RuntimeError("GitHub не вернул Android-релиз.")
-                    if not self.find_asset(mobile, "app-debug.apk") and not self.find_asset(mobile, "PrimeHub-Mobile.apk"):
-                        raise RuntimeError("В Android-релизе отсутствует APK.")
-                    self.releases["mobile"] = mobile
-                    checked.append("Android " + str(mobile["tag_name"]))
-                except Exception as exc:
-                    errors.append("Android: " + str(exc))
+                mobile = run_channel("android", "Android APK", settings.get("check_android_channel", True), self.fetch_latest_mobile_release)
+                self.releases["mobile"] = mobile or {}
             else:
                 errors.append("Неизвестная платформа: " + str(selected_platform))
 
-            # PrimeHub itself is common to both platform views.
-            try:
-                hub = self.fetch_json(API_HUB)
-                if not isinstance(hub, dict):
-                    raise RuntimeError("GitHub вернул некорректные данные PrimeHub.")
-                hub_tag = str(hub.get("tag_name", "")).strip()
-                hub_asset = self.find_asset(hub, "PrimeHub.exe")
-                if not hub_tag:
+            def get_hub_release():
+                release = self.fetch_json(API_HUB)
+                if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
-                if not hub_asset or not hub_asset.get("browser_download_url"):
-                    raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
-                checked.append("PrimeHub " + hub_tag)
+                asset = self.find_asset(release, "PrimeHub.exe")
+                if not asset or not asset.get("browser_download_url"):
+                    raise RuntimeError("В последнем релизе отсутствует скачиваемый PrimeHub.exe.")
+                return release
+            hub = run_channel("primehub", "PrimeHub", settings.get("check_primehub_channel", True), get_hub_release)
+            if hub:
+                hub_tag = str(hub.get("tag_name") or "")
                 if _version_key(hub_tag) > _version_key(APP_VERSION):
-                    self.check_hub_update(hub)
+                    try:
+                        self.check_hub_update(hub)
+                    except Exception as exc:
+                        errors.append("Обновление PrimeHub: " + str(exc))
+                        self._record_channel_status("primehub", True, "Релиз доступен (" + hub_tag + "), но загрузка обновления не завершилась: " + str(exc), hub_tag)
                 elif _version_key(hub_tag) < _version_key(APP_VERSION):
-                    # A newer local build than the public release is a warning,
-                    # not a failed check. It can happen during staged publishing.
                     self.set_status("Установлена тестовая версия PrimeHub " + APP_VERSION, COLORS["muted"])
-            except Exception as exc:
-                errors.append("PrimeHub: " + str(exc))
 
-            # Write a useful local diagnostic trail without requiring the user
-            # to copy an error dialog. Keep network exceptions separate by channel.
+            self.state["channel_status"] = self.channel_status
+            try:
+                self.save_state()
+            except OSError as exc:
+                errors.append("Сохранение диагностики: " + str(exc))
             try:
                 ROOT.mkdir(parents=True, exist_ok=True)
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
-                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform)
-                              + " checked=" + " | ".join(checked)
-                              + " errors=" + " | ".join(errors) + "\n")
+                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform) + " checked=" + " | ".join(checked) + " skipped=" + " | ".join(skipped) + " errors=" + " | ".join(errors) + "\n")
             except OSError:
                 pass
-
-            self.root.after(0, self.refresh_cards)
+            try:
+                self.root.after(0, self.refresh_cards)
+                self.root.after(0, self._refresh_channels_if_open)
+            except (tk.TclError, RuntimeError):
+                pass
             if errors:
                 self.set_status("Проблема в канале: " + errors[0][:180], COLORS["orange"])
-                self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов")
-                                  + " | Ошибки: " + " | ".join(errors)[:900])
-            else:
+                self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов") + (" | Отключено: " + ", ".join(skipped) if skipped else "") + " | Ошибки: " + " | ".join(errors)[:1200])
+            elif checked:
                 self.set_status("Проверка обновлений завершена", COLORS["green"])
-                self.set_progress(100, "Все каналы " + ("ПК" if selected_platform == "PC" else "Android")
-                                  + " проверены: " + " • ".join(checked))
+                self.set_progress(100, "Проверено: " + " • ".join(checked) + (" | Отключено: " + ", ".join(skipped) if skipped else ""))
+            else:
+                self.set_status("Все каналы отключены в настройках", COLORS["muted"])
+                self.set_progress(100, "Включи нужные источники в Настройки → Каналы.")
         except Exception as exc:
-            # Never leave the busy flag stuck if a UI callback or unexpected
-            # response shape fails; surface the error in the local log/status.
             try:
                 ROOT.mkdir(parents=True, exist_ok=True)
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
@@ -1072,10 +1039,9 @@ class PrimeHub:
             except OSError:
                 pass
             self.set_status("Ошибка проверки обновлений: " + str(exc), COLORS["orange"])
-            self.set_progress(100, "Проверка прервана: " + str(exc)[:900])
+            self.set_progress(100, "Проверка прервана: " + str(exc)[:1000])
         finally:
             self.busy = False
-
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
             return
