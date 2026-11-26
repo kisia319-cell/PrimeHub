@@ -30,7 +30,7 @@ jobs:
               'if selected_platform == "PC":',
               'elif selected_platform == "Android":',
               "self.fetch_latest_apocalypse_release()",
-              "self.fetch_latest_mobile_release()",
+              "self.fetch_latest_mobile_release",
               "update-check.log",
               "API_PRIME_MOBILE = \"https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest\"",
               "def launch_apocalypse(self):",
