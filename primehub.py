@@ -154,7 +154,7 @@ class PrimeHub:
         self.home_view.pack(fill="both", expand=True)
         # The library page has its own scrollable viewport so cards and the
         # lower controls remain reachable on short displays and at high DPI.
-        home_scroll_wrap = tk.Frame(self.home_body, bg=COLORS["bg"])
+        home_scroll_wrap = tk.Frame(self.home_view, bg=COLORS["bg"])
         home_scroll_wrap.pack(fill="both", expand=True)
         self.home_canvas = tk.Canvas(home_scroll_wrap, bg=COLORS["bg"], highlightthickness=0, bd=0)
         self.home_scrollbar = ttk.Scrollbar(home_scroll_wrap, orient="vertical", command=self.home_canvas.yview)
@@ -252,8 +252,7 @@ class PrimeHub:
                 if widget is self.home_body or widget is self.home_canvas:
                     inside_home = True
                     break
-                parent = widget.winfo_parent()
-                widget = widget.nametowidget(parent) if parent else None
+                widget = getattr(widget, "master", None)
             if not inside_home:
                 return
             if getattr(event, "num", None) == 4:
