@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.3.1"
+APP_VERSION = "v1.3.2"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -1142,34 +1142,62 @@ class PrimeHub:
         temp_current = current.with_name(current.name + ".new")
         parent_pid = os.getpid()
         backup = current.with_name(current.name + ".previous")
+        # The helper waits until this process exits, swaps the executable atomically,
+        # starts the new PrimeHub, and rolls back if the new process cannot stay alive.
         lines = [
             "@echo off",
             "setlocal",
-            "set \"STAGED=" + str(staged) + "\"",
-            "set \"CURRENT=" + str(current) + "\"",
-            "set \"WORKDIR=" + str(current.parent) + "\" ",
-            "set \"TEMPFILE=" + str(temp_current) + "\"",
-            "set \"BACKUP=" + str(backup) + "\"",
-            "set \"PARENT_PID=" + str(parent_pid) + "\"",
+            "set \"STAGED="+str(staged)+"\"",
+            "set \"CURRENT="+str(current)+"\"",
+            "set \"WORKDIR="+str(current.parent)+"\"",
+            "set \"TEMPFILE="+str(temp_current)+"\"",
+            "set \"BACKUP="+str(backup)+"\"",
+            "set \"PARENT_PID="+str(parent_pid)+"\"",
+            "set \"LOGFILE="+str(update_dir / "self-update.log")+"\"",
+            "echo [%date% %time%] Waiting for PrimeHub to close>>\"%LOGFILE%\"",
             ":wait_for_hub_exit",
             "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Get-Process -Id %PARENT_PID% -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }\"",
             "if not errorlevel 1 goto install_update",
             "timeout /t 1 /nobreak >nul",
             "goto wait_for_hub_exit",
             ":install_update",
+            "echo [%date% %time%] Installing downloaded update>>\"%LOGFILE%\"",
+            "set /a ATTEMPTS=0",
             ":retry_copy",
+            "set /a ATTEMPTS+=1",
             "copy /b /y \"%STAGED%\" \"%TEMPFILE%\" >nul 2>&1",
-            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry_copy)",
+            "if errorlevel 1 goto copy_retry_or_restore",
             "for %%A in (\"%STAGED%\") do set \"SOURCE_SIZE=%%~zA\"",
             "for %%A in (\"%TEMPFILE%\") do set \"COPY_SIZE=%%~zA\"",
-            "if not \"%SOURCE_SIZE%\"==\"%COPY_SIZE%\" (del /q \"%TEMPFILE%\" >nul 2>&1 & timeout /t 1 /nobreak >nul & goto retry_copy)",
+            "if \"%SOURCE_SIZE%\"==\"%COPY_SIZE%\" goto replace_executable",
+            "del /q \"%TEMPFILE%\" >nul 2>&1",
+            ":copy_retry_or_restore",
+            "if %ATTEMPTS% GEQ 30 goto restore_old",
+            "timeout /t 1 /nobreak >nul",
+            "goto retry_copy",
+            ":replace_executable",
             "if exist \"%CURRENT%\" copy /b /y \"%CURRENT%\" \"%BACKUP%\" >nul 2>&1",
             "move /y \"%TEMPFILE%\" \"%CURRENT%\" >nul 2>&1",
-            "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto retry_copy)",
+            "if errorlevel 1 goto restore_old",
+            "echo [%date% %time%] New executable installed; starting PrimeHub>>\"%LOGFILE%\"",
             "start \"\" /D \"%WORKDIR%\" \"%CURRENT%\"",
-            "timeout /t 2 /nobreak >nul",
+            "timeout /t 4 /nobreak >nul",
+            "tasklist /FI \"IMAGENAME eq PrimeHub.exe\" 2>nul | find /I \"PrimeHub.exe\" >nul",
+            "if errorlevel 1 goto rollback_update",
+            "echo [%date% %time%] New PrimeHub process detected>>\"%LOGFILE%\"",
             "del /q \"%STAGED%\" >nul 2>&1",
-            'del "%~f0"'
+            'del "%~f0"',
+            "exit /b 0",
+            ":rollback_update",
+            "echo [%date% %time%] New version failed to stay open; restoring backup>>\"%LOGFILE%\"",
+            ":restore_old",
+            "if exist \"%BACKUP%\" copy /b /y \"%BACKUP%\" \"%CURRENT%\" >nul 2>&1",
+            "if exist \"%CURRENT%\" start \"\" /D \"%WORKDIR%\" \"%CURRENT%\"",
+            "echo [%date% %time%] Previous PrimeHub executable relaunched>>\"%LOGFILE%\"",
+            "del /q \"%TEMPFILE%\" >nul 2>&1",
+            "del /q \"%STAGED%\" >nul 2>&1",
+            'del "%~f0"',
+            "exit /b 1"
         ]
         script.write_text("\r\n".join(lines), encoding="utf-8")
         self.state["hub_asset_stamp"] = stamp
