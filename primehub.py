@@ -4,17 +4,17 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.2.23"
+APP_VERSION = "v1.3.0"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
 APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
-API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
+API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
-API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
+API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
@@ -65,10 +65,14 @@ class PrimeHub:
         self.root.geometry("1120x740")
         self.root.minsize(900, 620)
         self.root.configure(bg=COLORS["bg"])
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.platform = "PC"
         self.releases = {}
         self.busy = False
         self.state = self.load_state()
+        self.root.geometry(self.get_launcher_settings().get("window_geometry", "1120x740"))
+        self.channel_status = self.state.get("channel_status", {}) if isinstance(self.state.get("channel_status", {}), dict) else {}
+        self.channels_view = None
         self.session = None  # Only the rotating refresh token is persisted, encrypted with Windows DPAPI.
         self.pending_email = ""
         self.account_window = None
@@ -80,14 +84,41 @@ class PrimeHub:
         else:
             self.set_status('Автоматическая проверка отключена настройками', COLORS['muted'])
 
-    def load_state(self):
-        try: return json.loads(DATA.read_text("utf-8"))
-        except: return {}
+    def on_close(self):
+        try:
+            settings = self.get_launcher_settings()
+            if settings.get("remember_window_size", True):
+                settings["window_geometry"] = self.root.geometry()
+                self.state["primehub_settings"] = settings
+                self.save_state()
+        except (tk.TclError, OSError, ValueError):
+            pass
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
+    def load_state(self):
+        try:
+            value = json.loads(DATA.read_text("utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError):
+            if DATA.exists():
+                try:
+                    damaged = DATA.with_name("hub-state.corrupt-" + time.strftime("%Y%m%d-%H%M%S") + ".json")
+                    DATA.replace(damaged)
+                except OSError:
+                    pass
+            return {}
     def save_state(self):
         ROOT.mkdir(parents=True, exist_ok=True)
-        DATA.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), "utf-8")
-
+        temp = DATA.with_suffix(".tmp")
+        payload = json.dumps(self.state, ensure_ascii=False, indent=2)
+        with temp.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, DATA)
     def build_ui(self):
         style = ttk.Style()
         style.theme_use("clam")
@@ -111,6 +142,8 @@ class PrimeHub:
         self.nav_home.pack(fill="x", padx=10, pady=4)
         self.nav_settings = tk.Button(self.sidebar, text="⚙   Настройки", command=self.show_settings, anchor="w", bg=COLORS["panel"], fg=COLORS["muted"], activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=13, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.nav_settings.pack(fill="x", padx=10, pady=4)
+        self.nav_channels = tk.Button(self.sidebar, text="◉   Каналы и диагностика", command=self.show_channels, anchor="w", bg=COLORS["panel"], fg=COLORS["muted"], activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=12, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.nav_channels.pack(fill="x", padx=10, pady=3)
         tk.Label(self.sidebar, text="ПРОФИЛЬ ИГР", font=("Segoe UI", 8, "bold"), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18, pady=(22, 7))
         self.nav_apocalypse = tk.Button(self.sidebar, text="☣   Apocalypse", command=self.show_apocalypse_settings, anchor="w", bg=COLORS["panel"], fg="#e89a9d", activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=11, font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.nav_apocalypse.pack(fill="x", padx=10, pady=2)
@@ -176,18 +209,41 @@ class PrimeHub:
 
     def get_launcher_settings(self):
         defaults = {
-            "check_updates_on_start": True,
-            "confirm_updates": True,
-            "close_hub_after_launch": False,
-            "remember_platform": True,
-            "download_unlimited": True,
-            "download_limit_mbps": 2.0,
+            "check_updates_on_start": True, "confirm_updates": True,
+            "close_hub_after_launch": False, "remember_platform": True,
+            "download_unlimited": True, "download_limit_mbps": 2.0,
+            "check_skyrealm_channel": True, "check_apocalypse_channel": True,
+            "check_android_channel": True, "check_primehub_channel": True,
+            "network_retries": 2, "network_timeout_seconds": 35,
+            "keep_backups": True, "clear_cache_after_install": False,
+            "remember_window_size": True, "window_geometry": "1120x740",
         }
         stored = self.state.get("primehub_settings", {})
         if not isinstance(stored, dict):
             stored = {}
-        return {**defaults, **stored}
-
+        result = {**defaults, **stored}
+        for key in (
+            "check_updates_on_start", "confirm_updates", "close_hub_after_launch",
+            "remember_platform", "download_unlimited", "check_skyrealm_channel",
+            "check_apocalypse_channel", "check_android_channel", "check_primehub_channel",
+            "keep_backups", "clear_cache_after_install", "remember_window_size",
+        ):
+            result[key] = bool(result.get(key, defaults[key]))
+        try:
+            result["download_limit_mbps"] = max(0.05, min(1000.0, float(result["download_limit_mbps"])))
+        except (TypeError, ValueError):
+            result["download_limit_mbps"] = defaults["download_limit_mbps"]
+        try:
+            result["network_retries"] = max(0, min(4, int(result["network_retries"])))
+        except (TypeError, ValueError):
+            result["network_retries"] = defaults["network_retries"]
+        try:
+            result["network_timeout_seconds"] = max(10, min(120, int(result["network_timeout_seconds"])))
+        except (TypeError, ValueError):
+            result["network_timeout_seconds"] = defaults["network_timeout_seconds"]
+        geometry = str(result.get("window_geometry") or defaults["window_geometry"])
+        result["window_geometry"] = geometry if re.fullmatch(r"\d{3,4}x\d{3,4}(?:[+-]\d+){0,2}", geometry) else defaults["window_geometry"]
+        return result
     def get_apocalypse_settings(self):
         defaults = {
             "effects": "high", "joy": 100, "motion": True, "hints": True,
@@ -235,22 +291,28 @@ class PrimeHub:
     def _nav_style(self, active):
         self.nav_home.configure(bg=COLORS["blue"] if active == "home" else COLORS["panel"], fg="white" if active == "home" else COLORS["muted"])
         self.nav_settings.configure(bg=COLORS["blue"] if active == "settings" else COLORS["panel"], fg="white" if active == "settings" else COLORS["muted"])
+        self.nav_channels.configure(bg=COLORS["blue"] if active == "channels" else COLORS["panel"], fg="white" if active == "channels" else COLORS["muted"])
         self.nav_apocalypse.configure(bg=COLORS["panel2"] if active == "apocalypse" else COLORS["panel"], fg="#ffd6d7" if active == "apocalypse" else "#e89a9d")
-
     def show_home(self):
         if self.settings_view and self.settings_view.winfo_exists():
             self.settings_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.pack_forget()
         self.home_view.pack(fill="both", expand=True)
         self._nav_style("home")
-
     def show_settings(self):
         self._render_settings("settings")
 
     def show_apocalypse_settings(self):
         self._render_settings("apocalypse")
 
+    def show_channels(self):
+        self._render_channels()
+
     def _render_settings(self, active_tab="settings"):
         self.home_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.pack_forget()
         if self.settings_view and self.settings_view.winfo_exists():
             self.settings_view.destroy()
         self.settings_view = tk.Frame(self.content, bg=COLORS["bg"])
@@ -268,7 +330,13 @@ class PrimeHub:
         scroll = ttk.Scrollbar(canvas_wrap, orient="vertical", command=canvas.yview)
         body = tk.Frame(canvas, bg=COLORS["bg"])
         body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=body, anchor="nw")
+        body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
+        def _wheel_settings(event):
+            if getattr(event, "delta", 0):
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _wheel_settings))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
@@ -277,10 +345,17 @@ class PrimeHub:
         if active_tab == "settings":
             values = self.get_launcher_settings()
             rows = [
-                ("check_updates_on_start", "Проверять обновления при запуске", "Проверять каталог PrimeHub после открытия лаунчера.", "bool"),
-                ("confirm_updates", "Подтверждать обновление игры", "Перед заменой уже установленной версии показывать запрос.", "bool"),
-                ("close_hub_after_launch", "Закрывать PrimeHub после запуска игры", "Лаунчер останется закрытым, а игра продолжит работать.", "bool"),
-                ("remember_platform", "Запоминать выбранную платформу", "Открывать PC или Android так, как было выбрано в прошлый раз.", "bool"),
+                ("check_updates_on_start", "Проверять обновления при запуске", "Автоматически проверять включённые каналы при старте.", "bool"),
+                ("confirm_updates", "Подтверждать обновление игры", "Спрашивать перед заменой установленной версии.", "bool"),
+                ("close_hub_after_launch", "Закрывать PrimeHub после запуска", "Закрывать окно лаунчера после старта игры.", "bool"),
+                ("remember_platform", "Запоминать платформу", "Открывать PC или Android как в прошлый раз.", "bool"),
+                ("remember_window_size", "Запоминать размер окна", "Сохранять размер и положение окна.", "bool"),
+                ("keep_backups", "Хранить резервную копию игры", "Оставлять предыдущую версию после обновления для отката.", "bool"),
+                ("clear_cache_after_install", "Очищать кэш после установки", "Удалять временные архивы после успешной установки.", "bool"),
+                ("check_skyrealm_channel", "Проверять канал SkyRealm PC", "Официальный релиз игры и отдельного запускателя.", "bool"),
+                ("check_apocalypse_channel", "Проверять канал Apocalypse PC", "Самостоятельный Windows-релиз Apocalypse.", "bool"),
+                ("check_android_channel", "Проверять канал Android APK", "Мобильный APK в выбранной вкладке Android.", "bool"),
+                ("check_primehub_channel", "Проверять обновления PrimeHub", "Отдельный канал самого лаунчера.", "bool"),
             ]
             tk.Label(body, text="ОБЩИЕ ПАРАМЕТРЫ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(4, 8))
             for key, label, description, kind in rows:
@@ -312,6 +387,21 @@ class PrimeHub:
             speed_entry = tk.Entry(speed_controls, textvariable=speed_var, width=10, bg=COLORS["panel2"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", font=("Segoe UI", 10))
             speed_entry.pack(anchor="e", pady=(4, 0), ipady=5)
             tk.Label(speed_controls, text="Примеры: 0.5 • 1 • 2 • 5 • 10", font=("Segoe UI", 7), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="e", pady=(4, 0))
+            tk.Label(body, text="СЕТЬ И ПОВТОРНЫЕ ПОПЫТКИ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(18, 8))
+            for key, label, description, options in [
+                ("network_retries", "Повторять неудачные запросы", "Повтор при тайм-ауте, ограничении GitHub 429 и временных ошибках сервера.", ["0", "1", "2", "3", "4"]),
+                ("network_timeout_seconds", "Тайм-аут сети", "Время ожидания ответа GitHub перед повтором.", ["10", "20", "35", "60", "90", "120"]),
+            ]:
+                card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+                card.pack(fill="x", pady=5)
+                copy = tk.Frame(card, bg=COLORS["panel"])
+                copy.pack(side="left", fill="x", expand=True, padx=15, pady=11)
+                tk.Label(copy, text=label, font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+                tk.Label(copy, text=description, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"], wraplength=500, justify="left").pack(anchor="w", pady=(3, 0))
+                variable = tk.StringVar(value=str(values.get(key, 2 if key == "network_retries" else 35)))
+                variables[key] = variable
+                ttk.Combobox(card, values=options, state="readonly", width=10, textvariable=variable).pack(side="right", padx=16, pady=12)
+            tk.Label(body, text="Подробные версии, время последней проверки и полный текст ошибки каждого источника доступны в разделе «Каналы и диагностика».", wraplength=760, justify="left", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w", pady=(12, 0))
         else:
             values = self.get_apocalypse_settings()
             self._settings_form_values = {}
@@ -368,14 +458,19 @@ class PrimeHub:
             try:
                 if active_tab == "settings":
                     settings = self.get_launcher_settings()
-                    settings.update({k: bool(v.get()) for k, v in variables.items() if k == "check_updates_on_start" or k == "confirm_updates" or k == "close_hub_after_launch" or k == "remember_platform" or k == "download_unlimited"})
+                    boolean_keys = ("check_updates_on_start", "confirm_updates", "close_hub_after_launch", "remember_platform", "download_unlimited", "remember_window_size", "keep_backups", "clear_cache_after_install", "check_skyrealm_channel", "check_apocalypse_channel", "check_android_channel", "check_primehub_channel")
+                    settings.update({k: bool(variables[k].get()) for k in boolean_keys if k in variables})
                     try:
                         limit = float(variables["download_limit_mbps"].get().replace(",", "."))
+                        retries = int(variables["network_retries"].get())
+                        timeout = int(variables["network_timeout_seconds"].get())
                     except (ValueError, AttributeError):
-                        raise ValueError("Укажи скорость числом, например 2 или 0.5 МБ/с.")
+                        raise ValueError("Проверь скорость загрузки, число повторов и тайм-аут.")
                     if not 0.05 <= limit <= 1000:
                         raise ValueError("Допустимый лимит: от 0.05 до 1000 МБ/с.")
-                    settings["download_limit_mbps"] = limit
+                    if retries not in range(5) or timeout not in (10, 20, 35, 60, 90, 120):
+                        raise ValueError("Выбери допустимое значение повторов и тайм-аута.")
+                    settings.update({"download_limit_mbps": limit, "network_retries": retries, "network_timeout_seconds": timeout})
                     self.state["primehub_settings"] = settings
                     self.save_state()
                 else:
@@ -405,6 +500,11 @@ class PrimeHub:
                     "check_updates_on_start": True, "confirm_updates": True,
                     "close_hub_after_launch": False, "remember_platform": True,
                     "download_unlimited": True, "download_limit_mbps": 2.0,
+                    "check_skyrealm_channel": True, "check_apocalypse_channel": True,
+                    "check_android_channel": True, "check_primehub_channel": True,
+                    "network_retries": 2, "network_timeout_seconds": 35,
+                    "keep_backups": True, "clear_cache_after_install": False,
+                    "remember_window_size": True, "window_geometry": "1120x740",
                 }
             else:
                 self.state["apocalypse_settings"] = {
@@ -423,6 +523,129 @@ class PrimeHub:
         save_btn.pack(side="right", padx=(8, 0))
         reset_btn = tk.Button(actions, text="СБРОСИТЬ", command=reset_page, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=15, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
         reset_btn.pack(side="right")
+
+    def _record_channel_status(self, key, ok, message, version=""):
+        self.channel_status[key] = {"ok": bool(ok), "message": str(message)[:1200], "version": str(version or ""), "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self.state["channel_status"] = self.channel_status
+
+    def _refresh_channels_if_open(self):
+        try:
+            if self.channels_view and self.channels_view.winfo_exists():
+                self._render_channels()
+        except tk.TclError:
+            pass
+
+    def _render_channels(self):
+        self.home_view.pack_forget()
+        if self.settings_view and self.settings_view.winfo_exists():
+            self.settings_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.destroy()
+        self.channels_view = tk.Frame(self.content, bg=COLORS["bg"])
+        self.channels_view.pack(fill="both", expand=True)
+        self._nav_style("channels")
+        tk.Label(self.channels_view, text="КАНАЛЫ И ДИАГНОСТИКА", font=("Segoe UI", 20, "bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(anchor="w", padx=28, pady=(24, 4))
+        tk.Label(self.channels_view, text="Отдельное состояние каждого источника, версия, время последней проверки и полный текст ошибки.", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"], wraplength=800, justify="left").pack(anchor="w", padx=28, pady=(0, 15))
+        wrap = tk.Frame(self.channels_view, bg=COLORS["bg"])
+        wrap.pack(fill="both", expand=True, padx=24, pady=(0, 8))
+        canvas = tk.Canvas(wrap, bg=COLORS["bg"], highlightthickness=0)
+        bar = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg=COLORS["bg"])
+        body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        settings = self.get_launcher_settings()
+        channels = [("skyrealm","SkyRealm PC","check_skyrealm_channel"),("apocalypse_pc","Apocalypse PC","check_apocalypse_channel"),("android","Android APK","check_android_channel"),("primehub","PrimeHub","check_primehub_channel")]
+        for index, (key, title, setting_key) in enumerate(channels):
+            item = self.channel_status.get(key, {})
+            enabled = settings.get(setting_key, True)
+            ok = item.get("ok")
+            label = "ОТКЛЮЧЁН" if not enabled else ("ДОСТУПЕН" if ok else ("ОШИБКА" if item.get("checked_at") else "НЕ ПРОВЕРЯЛСЯ"))
+            color = COLORS["muted"] if not enabled or not item.get("checked_at") else (COLORS["green"] if ok else COLORS["orange"])
+            card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+            card.grid(row=index//2, column=index%2, sticky="nsew", padx=6, pady=6)
+            body.grid_columnconfigure(index%2, weight=1)
+            tk.Label(card, text=title, font=("Segoe UI", 12, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(13, 4))
+            tk.Label(card, text="● " + label, font=("Segoe UI", 8, "bold"), fg=color, bg=COLORS["panel"]).pack(anchor="w", padx=15)
+            tk.Label(card, text=item.get("version") or "Версия пока не получена", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(5, 0))
+            tk.Label(card, text=item.get("message") or "Нажми «Проверить каналы».", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"], wraplength=350, justify="left").pack(anchor="w", padx=15, pady=(4, 3))
+            tk.Label(card, text="Последняя проверка: " + (item.get("checked_at") or "—"), font=("Segoe UI", 7), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(2, 13))
+        actions = tk.Frame(self.channels_view, bg=COLORS["bg"])
+        actions.pack(fill="x", padx=28, pady=(4, 16))
+        for label, command, color in [("ПРОВЕРИТЬ КАНАЛЫ",self.check_updates_async,COLORS["blue"]),("ЖУРНАЛ",self.open_update_log,COLORS["panel2"]),("ПАПКА ИГР",self.open_games_folder,COLORS["panel2"]),("ОЧИСТИТЬ КЭШ",self.clear_download_cache,COLORS["panel2"]),("ОТКАТ APOCALYPSE",self.restore_apocalypse_backup,"#68404a")]:
+            tk.Button(actions, text=label, command=command, bg=color, fg="white", activebackground=COLORS["cyan"], activeforeground="#07101d", bd=0, padx=10, pady=9, font=("Segoe UI", 8, "bold"), cursor="hand2").pack(side="left", padx=(0, 6))
+
+    def open_update_log(self):
+        path = ROOT / "update-check.log"
+        if not path.is_file():
+            messagebox.showinfo("PrimeHub", "Журнал ещё пуст. Сначала проверь каналы.", parent=self.root)
+            return
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror("PrimeHub", "Не удалось открыть журнал: " + str(exc), parent=self.root)
+
+    def open_games_folder(self):
+        GAMES.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(GAMES))
+        except Exception as exc:
+            messagebox.showerror("PrimeHub", "Не удалось открыть папку игр: " + str(exc), parent=self.root)
+
+    def clear_download_cache(self):
+        if self.busy:
+            messagebox.showinfo("PrimeHub", "Дождись завершения текущей загрузки.", parent=self.root)
+            return
+        cache = ROOT / "cache"
+        if not cache.exists():
+            messagebox.showinfo("PrimeHub", "Кэш уже пуст.", parent=self.root)
+            return
+        if not messagebox.askyesno("Очистка кэша", "Удалить только временные архивы? Игры, миры, настройки и резервные копии не затрагиваются.", parent=self.root):
+            return
+        try:
+            shutil.rmtree(cache)
+            messagebox.showinfo("PrimeHub", "Временный кэш очищен.", parent=self.root)
+        except OSError as exc:
+            messagebox.showerror("PrimeHub", "Не удалось очистить кэш: " + str(exc), parent=self.root)
+
+    def restore_apocalypse_backup(self):
+        if self.busy:
+            messagebox.showinfo("PrimeHub", "Дождись завершения текущей операции.", parent=self.root)
+            return
+        backup = ROOT / "backups" / "Apocalypse.previous"
+        dest = self.installed_dir("Apocalypse")
+        if not backup.is_dir() or not (backup / "SkyRealmApocalypse.exe").is_file():
+            messagebox.showinfo("Откат Apocalypse", "Резервная копия не найдена. Включи её хранение перед следующим обновлением.", parent=self.root)
+            return
+        if not messagebox.askyesno("Откат Apocalypse", "Вернуть предыдущую версию? Текущая версия станет резервной копией.", parent=self.root):
+            return
+        temp = ROOT / "staging" / "Apocalypse-current"
+        try:
+            temp.parent.mkdir(parents=True, exist_ok=True)
+            if temp.exists():
+                shutil.rmtree(temp)
+            if dest.exists():
+                dest.rename(temp)
+            try:
+                backup.rename(dest)
+            except Exception:
+                if temp.exists() and not dest.exists():
+                    temp.rename(dest)
+                raise
+            if temp.exists():
+                temp.rename(backup)
+            edition_path = dest / "edition.json"
+            edition = json.loads(edition_path.read_text(encoding="utf-8")) if edition_path.is_file() else {}
+            self.state["Apocalypse"] = {"version": edition.get("version", "backup"), "game_version": "mobile-apocalypse", "edition": "apocalypse-mobile", "installed": int(time.time())}
+            self.save_state()
+            self.set_status("Apocalypse восстановлена из резервной копии", COLORS["green"])
+            self.refresh_cards()
+            self._refresh_channels_if_open()
+        except Exception as exc:
+            messagebox.showerror("Откат Apocalypse", "Не удалось восстановить копию: " + str(exc), parent=self.root)
 
     def set_platform(self, platform):
         self.platform = platform
@@ -544,28 +767,68 @@ class PrimeHub:
         self.root.update_idletasks()
 
     def set_status(self, msg, color=None):
-        self.root.after(0, lambda:self.status.configure(text="● "+msg, fg=color or COLORS["cyan"]))
-
+        def apply():
+            try:
+                if self.root.winfo_exists() and hasattr(self, "status") and self.status.winfo_exists():
+                    self.status.configure(text="● " + str(msg), fg=color or COLORS["cyan"])
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            pass
     def set_progress(self, value, msg):
         def apply():
-            self.progress["value"] = value
-            self.progress_text.configure(text=msg)
-        self.root.after(0, apply)
+            try:
+                if self.root.winfo_exists() and hasattr(self, "progress"):
+                    self.progress["value"] = max(0, min(100, int(value)))
+                    self.progress_text.configure(text=str(msg))
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            pass
+    def _read_response(self, request, timeout=None):
+        """Retry temporary network and GitHub rate-limit errors with bounded backoff."""
+        settings = self.get_launcher_settings()
+        timeout = int(timeout or settings.get("network_timeout_seconds", 35))
+        retries = int(settings.get("network_retries", 2))
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read(), response.geturl()
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                remaining = (exc.headers or {}).get("X-RateLimit-Remaining", "")
+                retryable = exc.code in (408, 425, 429, 500, 502, 503, 504) or (exc.code == 403 and remaining == "0")
+                if not retryable or attempt >= retries:
+                    raise
+                retry_after = (exc.headers or {}).get("Retry-After", "")
+                try:
+                    delay = max(0.5, min(8.0, float(retry_after)))
+                except (TypeError, ValueError):
+                    delay = min(4.0, 0.75 * (2 ** attempt))
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+                last_error = exc
+                if attempt >= retries:
+                    raise
+                delay = min(4.0, 0.75 * (2 ** attempt))
+            self.set_status("Повтор соединения с GitHub: " + str(attempt + 1) + "/" + str(retries))
+            time.sleep(delay)
+        raise RuntimeError("Сетевой запрос не выполнен: " + str(last_error))
 
     def fetch_json(self, url):
-        """Fetch a release through GitHub HTML, then fall back to its stable REST API."""
+        """Read GitHub release metadata through REST; tolerate temporary HTML and API failures."""
         parsed = urllib.parse.urlsplit(url)
-        release_prefix = "/releases/"
-        if parsed.netloc.lower() == "github.com" and release_prefix in parsed.path:
-            repo_path = parsed.path.split(release_prefix, 1)[0]
+        if parsed.netloc.lower() == "github.com" and "/releases/" in parsed.path:
+            repo_path = parsed.path.split("/releases/", 1)[0]
             requested_tag = re.search(r"/releases/tag/([^/?#]+)", parsed.path)
             html_error = None
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
-                with urllib.request.urlopen(req, timeout=20) as response:
-                    page = response.read().decode("utf-8", errors="replace")
-                    final_url = response.geturl()
-
+                _, final_url = self._read_response(req)
                 final_path = urllib.parse.urlsplit(final_url).path
                 tag_match = re.search(r"/releases/tag/([^/?#]+)", final_path)
                 if tag_match:
@@ -574,274 +837,211 @@ class PrimeHub:
                     tag = urllib.parse.unquote(requested_tag.group(1))
                 else:
                     raise RuntimeError("GitHub не вернул номер последнего релиза.")
-
-                assets_page_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
-                assets_req = urllib.request.Request(assets_page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
-                with urllib.request.urlopen(assets_req, timeout=20) as asset_response:
-                    assets_page = asset_response.read().decode("utf-8", errors="replace")
-
-                assets = []
-                seen = set()
+                assets_url = "https://github.com" + repo_path + "/releases/expanded_assets/" + urllib.parse.quote(tag, safe="")
+                assets_req = urllib.request.Request(assets_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                assets_bytes, _ = self._read_response(assets_req)
+                assets_page = assets_bytes.decode("utf-8", errors="replace")
+                assets, seen = [], set()
                 for match in re.finditer(r"""href=["']([^"']*/releases/download/[^"']+)["']""", assets_page, re.I):
-                    href = html.unescape(match.group(1))
-                    asset_url = urllib.parse.urljoin("https://github.com", href)
-                    asset_name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
-                    if asset_name and asset_name not in seen:
-                        seen.add(asset_name)
-                        assets.append({"name": asset_name, "browser_download_url": asset_url})
+                    asset_url = urllib.parse.urljoin("https://github.com", html.unescape(match.group(1)))
+                    name = urllib.parse.unquote(urllib.parse.urlsplit(asset_url).path.rsplit("/", 1)[-1])
+                    if name and name not in seen:
+                        seen.add(name)
+                        assets.append({"name": name, "browser_download_url": asset_url})
                 if assets:
                     return {"tag_name": tag, "html_url": final_url, "assets": assets}
                 html_error = RuntimeError("Страница релиза GitHub не вернула список файлов.")
             except Exception as exc:
                 html_error = exc
-
-            # HTML/expanded-assets pages can be blocked by regional proxies or
-            # return changed markup. REST exposes the same metadata reliably.
             api_base = "https://api.github.com/repos" + repo_path
-            if requested_tag:
-                api_url = api_base + "/releases/tags/" + urllib.parse.quote(urllib.parse.unquote(requested_tag.group(1)), safe="")
-            else:
-                api_url = api_base + "/releases/latest"
+            api_url = api_base + ("/releases/tags/" + urllib.parse.quote(urllib.parse.unquote(requested_tag.group(1)), safe="") if requested_tag else "/releases/latest")
             try:
                 req = urllib.request.Request(api_url, headers=HEADERS)
-                with urllib.request.urlopen(req, timeout=20) as response:
-                    release = json.loads(response.read().decode("utf-8"))
-                if not release.get("tag_name"):
+                raw, _ = self._read_response(req)
+                release = json.loads(raw.decode("utf-8"))
+                if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub API не вернул номер версии.")
                 return release
             except Exception as api_error:
-                raise RuntimeError(
-                    "Не удалось получить релиз GitHub. Страница: " + str(html_error)
-                    + "; API: " + str(api_error)
-                ) from api_error
-
+                raise RuntimeError("Не удалось получить релиз GitHub. Страница: " + str(html_error) + "; API: " + str(api_error)) from api_error
         req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=25) as response:
-            return json.loads(response.read().decode("utf-8"))
-
+        try:
+            raw, _ = self._read_response(req)
+            return json.loads(raw.decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError) as api_error:
+            # GitHub's public HTML release page is a useful second route when
+            # the REST endpoint is rate-limited or filtered by a regional proxy.
+            if parsed.netloc.lower() == "api.github.com" and parsed.path.endswith("/releases/latest"):
+                repo_path = parsed.path.split("/repos/", 1)[-1].rsplit("/releases/latest", 1)[0]
+                try:
+                    return self.fetch_json("https://github.com/" + repo_path + "/releases/latest")
+                except Exception as html_error:
+                    raise RuntimeError("GitHub API: " + str(api_error) + "; HTML fallback: " + str(html_error)) from html_error
+            raise RuntimeError("Не удалось прочитать канал GitHub: " + str(api_error)) from api_error
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("GitHub вернул некорректный JSON для канала: " + str(exc)) from exc
     def fetch_latest_mobile_release(self):
-        """Fetch the latest stable mobile APK release without scanning 100 PC/mobile releases."""
+        """Resolve a published Android APK release, validating the actual asset."""
         errors = []
         for url in (API_PRIME_MOBILE, "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"):
             try:
                 release = self.fetch_json(url)
                 if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub не вернул тег Android-релиза.")
-                if not self.find_asset(release, "app-debug.apk") and not self.find_asset(release, "PrimeHub-Mobile.apk"):
-                    raise RuntimeError("В последнем Android-релизе отсутствует APK.")
+                asset = self.find_asset(release, "app-debug.apk") or self.find_asset(release, "PrimeHub-Mobile.apk")
+                if not asset or not asset.get("browser_download_url"):
+                    raise RuntimeError("В Android-релизе отсутствует скачиваемый APK.")
                 return release
             except Exception as exc:
                 errors.append(str(exc))
         raise RuntimeError("Не удалось проверить Android-релиз: " + " | ".join(errors))
-
     def fetch_latest_apocalypse_release(self):
-        """Resolve the newest Windows Apocalypse release, not a permanently pinned tag."""
-        releases = None
-        try:
-            response = self.fetch_json(API_APOCALYPSE_PC)
-            if isinstance(response, list):
-                releases = response
-        except Exception:
-            # GitHub REST can be rate-limited on shared/regional networks.
-            releases = None
-
+        """Find the newest non-draft Windows Apocalypse release with a real EXE asset."""
+        api_error, releases = None, []
+        for page in range(1, 4):
+            try:
+                batch = self.fetch_json(API_APOCALYPSE_PC + "&page=" + str(page))
+                if not isinstance(batch, list):
+                    raise RuntimeError("GitHub вернул не список релизов Apocalypse.")
+                releases.extend(item for item in batch if isinstance(item, dict))
+                if len(batch) < 100:
+                    break
+            except Exception as exc:
+                api_error = exc
+                break
         matching = [
-            item for item in (releases or [])
+            item for item in releases
             if str(item.get("tag_name", "")).startswith("apocalypse-pc-v")
             and not item.get("draft", False)
-            and any(
-                str(asset.get("name", "")).lower() == "skyrealmapocalypse.exe"
-                for asset in (item.get("assets") or [])
-            )
+            and any(str(asset.get("name", "")).lower() == "skyrealmapocalypse.exe" and asset.get("browser_download_url") for asset in (item.get("assets") or []))
         ]
         if matching:
-            release = max(
-                matching,
-                key=lambda item: tuple(int(part) for part in re.findall(r"\d+", str(item.get("tag_name", ""))))
-            )
-            return {
-                "tag_name": release.get("tag_name", ""),
-                "html_url": release.get("html_url", ""),
-                "assets": [
-                    {
-                        "name": asset.get("name", ""),
-                        "browser_download_url": asset.get("browser_download_url", ""),
-                        "updated_at": asset.get("updated_at"),
-                        "id": asset.get("id"),
-                        "digest": asset.get("digest"),
-                        "size": asset.get("size"),
-                    }
-                    for asset in release.get("assets", [])
-                ],
-            }
-
-        # Fallback 1: GitHub's public Atom feed. It exposes release tags without
-        # depending on the changing HTML markup of the releases listing.
-        tags = set()
-        feed_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom"
+            return max(matching, key=lambda item: _version_key(item.get("tag_name")))
+        tags, fallback_errors = set(), []
         try:
-            feed_request = urllib.request.Request(
-                feed_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2", "Accept": "application/atom+xml"}
-            )
-            with urllib.request.urlopen(feed_request, timeout=25) as response:
-                feed = response.read().decode("utf-8", errors="replace")
-            tags.update(re.findall(
-                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                html.unescape(feed),
-                re.I,
-            ))
-        except Exception:
-            pass
-
-        # Fallback 2: releases page. Accept relative and absolute hrefs because
-        # GitHub changes the markup between desktop and cached responses.
+            req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3", "Accept": "application/atom+xml"})
+            raw, _ = self._read_response(req)
+            tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', html.unescape(raw.decode("utf-8", errors="replace")), re.I))
+        except Exception as exc:
+            fallback_errors.append("Atom: " + str(exc))
         if not tags:
-            page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc"
-            request = urllib.request.Request(
-                page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.2"}
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                page = response.read().decode("utf-8", errors="replace")
-            page = html.unescape(page)
-            tags.update(re.findall(
-                r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                page,
-                re.I,
-            ))
-            # Some GitHub responses HTML-escape slashes or include a URL prefix
-            # in embedded JSON rather than a plain href attribute.
-            tags.update(re.findall(
-                r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
-                page,
-                re.I,
-            ))
-        if not tags:
-            raise RuntimeError(
-                "GitHub не вернул список Windows-релизов Apocalypse. "
-                "Проверь подключение к github.com и повтори проверку."
-            )
-
-        # A matching tag is not enough: some Apocalypse prereleases/metadata
-        # entries do not contain the Windows executable. Try newest tags first
-        # and select only a release that actually publishes the required EXE.
-        ordered_tags = sorted(
-            tags,
-            key=lambda tag: tuple(int(part) for part in re.findall(r"\d+", tag)),
-            reverse=True,
-        )
-        for candidate_tag in ordered_tags:
-            release = self.fetch_json(
-                "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/"
-                + urllib.parse.quote(candidate_tag, safe="")
-            )
-            if self.find_asset(release, "SkyRealmApocalypse.exe"):
-                return release
-        raise RuntimeError(
-            "Найдены версии Apocalypse, но ни в одной не опубликован SkyRealmApocalypse.exe."
-        )
-
+            try:
+                req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                raw, _ = self._read_response(req)
+                page = html.unescape(raw.decode("utf-8", errors="replace"))
+                tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
+                tags.update(re.findall(r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
+            except Exception as exc:
+                fallback_errors.append("Страница релизов: " + str(exc))
+        for tag in sorted(tags, key=_version_key, reverse=True):
+            try:
+                release = self.fetch_json("https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/tags/" + urllib.parse.quote(tag, safe=""))
+                if isinstance(release, dict) and self.find_asset(release, "SkyRealmApocalypse.exe"):
+                    return release
+            except Exception as exc:
+                fallback_errors.append(tag + ": " + str(exc))
+        detail = ("API: " + str(api_error) + ". ") if api_error else ""
+        detail += " ".join(fallback_errors)
+        raise RuntimeError("Не удалось получить опубликованный Windows-релиз Apocalypse с файлом SkyRealmApocalypse.exe. " + detail[:900])
     def check_updates_async(self):
-        if self.busy: return
-        threading.Thread(target=self.check_updates,daemon=True).start()
-
+        if self.busy:
+            self.set_status("Дождись завершения текущей операции", COLORS["orange"])
+            return
+        self.busy = True
+        threading.Thread(target=self.check_updates, daemon=True).start()
     def check_updates(self):
         self.busy = True
-        errors = []
-        checked = []
-        self.set_status("Проверяем официальные версии...")
-        # Check only channels relevant to the selected platform. Previously the
-        # Windows view also queried the Android APK channel; a temporary APK/API
-        # failure therefore showed a misleading "partially completed" result
-        # even when every PC game was checked successfully.
+        errors, checked, skipped = [], [], []
         selected_platform = self.platform
-        sky = mobile = apocalypse_pc = hub = None
-        hub_tag = ""
+        settings = self.get_launcher_settings()
+        self.set_status("Проверяем официальные каналы " + selected_platform + "...")
+        def run_channel(key, label, enabled, callback):
+            if not enabled:
+                self._record_channel_status(key, False, "Проверка отключена в настройках.")
+                skipped.append(label)
+                return None
+            try:
+                result = callback()
+                tag = str(result.get("tag_name") or "") if isinstance(result, dict) else ""
+                self._record_channel_status(key, True, "Канал доступен. Опубликованный релиз: " + tag, tag)
+                checked.append(label + " " + tag)
+                return result
+            except Exception as exc:
+                self._record_channel_status(key, False, str(exc))
+                errors.append(label + ": " + str(exc))
+                return None
         try:
             if selected_platform == "PC":
-                try:
-                    sky = self.fetch_json(API_SKY)
-                    if not isinstance(sky, dict) or not sky.get("tag_name"):
+                def get_sky_release():
+                    release = self.fetch_json(API_SKY)
+                    if not isinstance(release, dict) or not release.get("tag_name"):
                         raise RuntimeError("GitHub не вернул тег релиза SkyRealm.")
-                    self.releases["sky"] = sky
-                    checked.append("SkyRealm " + str(sky["tag_name"]))
-                    installed_sky = str((self.state.get("SkyRealm") or {}).get("version") or "не установлено")
-                    latest_sky = str(sky.get("tag_name") or "")
-                    if latest_sky and installed_sky.lower() != latest_sky.lower():
-                        self.set_status("Доступно обновление SkyRealm: " + installed_sky + " → " + latest_sky, COLORS["green"])
-                except Exception as exc:
-                    errors.append("SkyRealm: " + str(exc))
-
-                try:
-                    apocalypse_pc = self.fetch_latest_apocalypse_release()
-                    if not isinstance(apocalypse_pc, dict) or not apocalypse_pc.get("tag_name"):
-                        raise RuntimeError("GitHub не вернул Windows-релиз Apocalypse.")
-                    if not self.find_asset(apocalypse_pc, "SkyRealmApocalypse.exe"):
-                        raise RuntimeError("В Windows-релизе Apocalypse отсутствует SkyRealmApocalypse.exe.")
-                    self.releases["apocalypse_pc"] = apocalypse_pc
-                    checked.append("Apocalypse " + str(apocalypse_pc["tag_name"]))
-                except Exception as exc:
-                    errors.append("Apocalypse: " + str(exc))
-                    installed_tag = str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION)
-                    self.releases["apocalypse_pc"] = {"tag_name": installed_tag, "assets": []}
-
+                    missing = [name for name in ("SkyRealm_Game.zip", "SkyRealm_Windows.zip", "PrimeLauncher.exe") if not self.find_asset(release, name)]
+                    if missing:
+                        raise RuntimeError("В релизе " + str(release["tag_name"]) + " отсутствуют файлы: " + ", ".join(missing))
+                    return release
+                sky = run_channel("skyrealm", "SkyRealm PC", settings.get("check_skyrealm_channel", True), get_sky_release)
+                self.releases["sky"] = sky or {}
+                apocalypse = run_channel("apocalypse_pc", "Apocalypse PC", settings.get("check_apocalypse_channel", True), self.fetch_latest_apocalypse_release)
+                if apocalypse and self.find_asset(apocalypse, "SkyRealmApocalypse.exe"):
+                    self.releases["apocalypse_pc"] = apocalypse
+                else:
+                    if apocalypse:
+                        errors.append("Apocalypse PC: в релизе отсутствует SkyRealmApocalypse.exe.")
+                        self._record_channel_status("apocalypse_pc", False, "В релизе отсутствует SkyRealmApocalypse.exe.")
+                    self.releases["apocalypse_pc"] = {"tag_name": str((self.state.get("Apocalypse") or {}).get("version") or APOCALYPSE_PC_VERSION), "assets": []}
             elif selected_platform == "Android":
-                try:
-                    mobile = self.fetch_latest_mobile_release()
-                    if not isinstance(mobile, dict) or not mobile.get("tag_name"):
-                        raise RuntimeError("GitHub не вернул Android-релиз.")
-                    if not self.find_asset(mobile, "app-debug.apk") and not self.find_asset(mobile, "PrimeHub-Mobile.apk"):
-                        raise RuntimeError("В Android-релизе отсутствует APK.")
-                    self.releases["mobile"] = mobile
-                    checked.append("Android " + str(mobile["tag_name"]))
-                except Exception as exc:
-                    errors.append("Android: " + str(exc))
+                mobile = run_channel("android", "Android APK", settings.get("check_android_channel", True), self.fetch_latest_mobile_release)
+                self.releases["mobile"] = mobile or {}
             else:
                 errors.append("Неизвестная платформа: " + str(selected_platform))
 
-            # PrimeHub itself is common to both platform views.
-            try:
-                hub = self.fetch_json(API_HUB)
-                if not isinstance(hub, dict):
-                    raise RuntimeError("GitHub вернул некорректные данные PrimeHub.")
-                hub_tag = str(hub.get("tag_name", "")).strip()
-                hub_asset = self.find_asset(hub, "PrimeHub.exe")
-                if not hub_tag:
+            def get_hub_release():
+                release = self.fetch_json(API_HUB)
+                if not isinstance(release, dict) or not release.get("tag_name"):
                     raise RuntimeError("GitHub не вернул номер версии PrimeHub.")
-                if not hub_asset or not hub_asset.get("browser_download_url"):
-                    raise RuntimeError("В последнем релизе PrimeHub отсутствует файл PrimeHub.exe.")
-                checked.append("PrimeHub " + hub_tag)
+                asset = self.find_asset(release, "PrimeHub.exe")
+                if not asset or not asset.get("browser_download_url"):
+                    raise RuntimeError("В последнем релизе отсутствует скачиваемый PrimeHub.exe.")
+                return release
+            hub = run_channel("primehub", "PrimeHub", settings.get("check_primehub_channel", True), get_hub_release)
+            if hub:
+                hub_tag = str(hub.get("tag_name") or "")
                 if _version_key(hub_tag) > _version_key(APP_VERSION):
-                    self.check_hub_update(hub)
+                    try:
+                        self.check_hub_update(hub)
+                    except Exception as exc:
+                        errors.append("Обновление PrimeHub: " + str(exc))
+                        self._record_channel_status("primehub", True, "Релиз доступен (" + hub_tag + "), но загрузка обновления не завершилась: " + str(exc), hub_tag)
                 elif _version_key(hub_tag) < _version_key(APP_VERSION):
-                    # A newer local build than the public release is a warning,
-                    # not a failed check. It can happen during staged publishing.
                     self.set_status("Установлена тестовая версия PrimeHub " + APP_VERSION, COLORS["muted"])
-            except Exception as exc:
-                errors.append("PrimeHub: " + str(exc))
 
-            # Write a useful local diagnostic trail without requiring the user
-            # to copy an error dialog. Keep network exceptions separate by channel.
+            self.state["channel_status"] = self.channel_status
+            try:
+                self.save_state()
+            except OSError as exc:
+                errors.append("Сохранение диагностики: " + str(exc))
             try:
                 ROOT.mkdir(parents=True, exist_ok=True)
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
-                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform)
-                              + " checked=" + " | ".join(checked)
-                              + " errors=" + " | ".join(errors) + "\n")
+                    log.write(time.strftime("%Y-%m-%d %H:%M:%S") + " platform=" + str(selected_platform) + " checked=" + " | ".join(checked) + " skipped=" + " | ".join(skipped) + " errors=" + " | ".join(errors) + "\n")
             except OSError:
                 pass
-
-            self.root.after(0, self.refresh_cards)
+            try:
+                self.root.after(0, self.refresh_cards)
+                self.root.after(0, self._refresh_channels_if_open)
+            except (tk.TclError, RuntimeError):
+                pass
             if errors:
                 self.set_status("Проблема в канале: " + errors[0][:180], COLORS["orange"])
-                self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов")
-                                  + " | Ошибки: " + " | ".join(errors)[:900])
-            else:
+                self.set_progress(100, "Проверено: " + (" • ".join(checked) or "нет каналов") + (" | Отключено: " + ", ".join(skipped) if skipped else "") + " | Ошибки: " + " | ".join(errors)[:1200])
+            elif checked:
                 self.set_status("Проверка обновлений завершена", COLORS["green"])
-                self.set_progress(100, "Все каналы " + ("ПК" if selected_platform == "PC" else "Android")
-                                  + " проверены: " + " • ".join(checked))
+                self.set_progress(100, "Проверено: " + " • ".join(checked) + (" | Отключено: " + ", ".join(skipped) if skipped else ""))
+            else:
+                self.set_status("Все каналы отключены в настройках", COLORS["muted"])
+                self.set_progress(100, "Включи нужные источники в Настройки → Каналы.")
         except Exception as exc:
-            # Never leave the busy flag stuck if a UI callback or unexpected
-            # response shape fails; surface the error in the local log/status.
             try:
                 ROOT.mkdir(parents=True, exist_ok=True)
                 with (ROOT / "update-check.log").open("a", encoding="utf-8") as log:
@@ -849,10 +1049,9 @@ class PrimeHub:
             except OSError:
                 pass
             self.set_status("Ошибка проверки обновлений: " + str(exc), COLORS["orange"])
-            self.set_progress(100, "Проверка прервана: " + str(exc)[:900])
+            self.set_progress(100, "Проверка прервана: " + str(exc)[:1000])
         finally:
             self.busy = False
-
     def check_hub_update(self, release):
         if not getattr(sys, "frozen", False):
             return
@@ -871,7 +1070,7 @@ class PrimeHub:
         staged = update_dir / "PrimeHub.next.exe"
         script = update_dir / "apply-hub-update.cmd"
         self.set_status("Доступно обновление PrimeHub — загружаем...")
-        self.download(asset["browser_download_url"], staged)
+        self.download_asset(asset, staged)
         # Refuse to replace the running Hub with a truncated/non-Windows download.
         if not staged.is_file() or staged.stat().st_size < 1_000_000:
             raise RuntimeError("Обновление PrimeHub скачалось не полностью. Старую версию оставили без изменений.")
@@ -923,43 +1122,76 @@ class PrimeHub:
         return None
 
     def download(self, url, target):
-        target.parent.mkdir(parents=True,exist_ok=True)
-        req=urllib.request.Request(url,headers={"User-Agent":"PrimeHub/1.0"})
-        download_settings = self.get_launcher_settings()
-        unlimited = bool(download_settings.get("download_unlimited", True))
-        try:
-            limit_mbps = float(download_settings.get("download_limit_mbps", 2.0))
-        except (TypeError, ValueError):
-            limit_mbps = 2.0
+        target.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "PrimeHub/1.3", "Accept": "*/*"})
+        settings = self.get_launcher_settings()
+        retries = int(settings.get("network_retries", 2))
+        timeout = int(settings.get("network_timeout_seconds", 35))
+        unlimited = bool(settings.get("download_unlimited", True))
+        limit_mbps = float(settings.get("download_limit_mbps", 2.0))
         bytes_per_second = None if unlimited else max(0.05, min(1000.0, limit_mbps)) * 1024 * 1024
-        started = time.monotonic()
-        try:
-            with urllib.request.urlopen(req,timeout=90) as response, open(target,"wb") as out:
-                total=int(response.headers.get("Content-Length",0)); done=0
-                while True:
-                    chunk=response.read(1024*512)
-                    if not chunk: break
-                    out.write(chunk); done+=len(chunk)
-                    if bytes_per_second:
-                        # Throttle the whole stream, not just the visible progress updates.
-                        expected_elapsed = done / bytes_per_second
-                        remaining = expected_elapsed - (time.monotonic() - started)
-                        while remaining > 0:
-                            time.sleep(min(0.2, remaining))
+        last_error = None
+        for attempt in range(retries + 1):
+            started, done, total = time.monotonic(), 0, 0
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response, target.open("wb") as out:
+                    total = int(response.headers.get("Content-Length", 0) or 0)
+                    while True:
+                        chunk = response.read(1024 * 512)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if bytes_per_second:
+                            expected_elapsed = done / bytes_per_second
                             remaining = expected_elapsed - (time.monotonic() - started)
-                    pct=int(done*100/total) if total else 0
-                    mode = "без ограничений" if not bytes_per_second else f"лимит {limit_mbps:g} МБ/с"
-                    self.set_progress(pct,f"Загрузка: {target.name} • {done//1048576} МБ • {mode}")
-                out.flush()
-                os.fsync(out.fileno())
-            if total and done != total:
-                raise RuntimeError(f"Загрузка оборвалась: получено {done} из {total} байт.")
-        except Exception:
-            try: target.unlink(missing_ok=True)
-            except Exception: pass
-            raise
-        return target
+                            while remaining > 0:
+                                time.sleep(min(0.2, remaining))
+                                remaining = expected_elapsed - (time.monotonic() - started)
+                        pct = int(done * 100 / total) if total else 0
+                        mode = "без ограничений" if not bytes_per_second else f"лимит {limit_mbps:g} МБ/с"
+                        self.set_progress(pct, f"Загрузка: {target.name} • {done // 1048576} МБ • {mode}")
+                    out.flush()
+                    os.fsync(out.fileno())
+                if total and done != total:
+                    raise RuntimeError(f"Загрузка оборвалась: получено {done} из {total} байт.")
+                if done == 0:
+                    raise RuntimeError("Сервер вернул пустой файл: " + target.name)
+                return target
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                retryable = exc.code in (408, 425, 429, 500, 502, 503, 504)
+            except Exception as exc:
+                last_error, retryable = exc, True
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if not retryable or attempt >= retries:
+                raise RuntimeError("Не удалось загрузить " + target.name + ": " + str(last_error)) from last_error
+            self.set_status("Повтор загрузки " + target.name + " (" + str(attempt + 1) + "/" + str(retries) + ")", COLORS["orange"])
+            time.sleep(min(4.0, 0.75 * (2 ** attempt)))
+        raise RuntimeError("Загрузка не завершилась: " + str(last_error))
 
+    def download_asset(self, asset, target):
+        url = str((asset or {}).get("browser_download_url") or "")
+        if not url:
+            raise RuntimeError("GitHub не предоставил ссылку на файл " + target.name + ".")
+        self.download(url, target)
+        expected_size = int((asset or {}).get("size") or 0)
+        if expected_size and target.stat().st_size != expected_size:
+            target.unlink(missing_ok=True)
+            raise RuntimeError("Размер " + target.name + " не совпадает с опубликованным размером GitHub.")
+        digest = str((asset or {}).get("digest") or "").lower()
+        if digest.startswith("sha256:"):
+            actual = hashlib.sha256()
+            with target.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    actual.update(chunk)
+            if actual.hexdigest().lower() != digest.split(":", 1)[1]:
+                target.unlink(missing_ok=True)
+                raise RuntimeError("SHA-256 " + target.name + " не совпадает с контрольной суммой GitHub.")
+        return target
     def install_game(self, game):
         if self.busy:
             return
@@ -979,6 +1211,7 @@ class PrimeHub:
             )
             if not accepted:
                 return
+        self.busy = True
         threading.Thread(target=self._install_game, args=(game,), daemon=True).start()
 
     def _install_updates_sequential(self, games):
@@ -1033,9 +1266,9 @@ class PrimeHub:
         game_archive = cache / (game + "_Game_" + safe_tag + ".zip")
         runtime_archive = cache / (game + "_Windows_" + safe_tag + ".zip")
         self.set_status("Скачиваем отдельное издание " + game + "...")
-        self.download(game_asset["browser_download_url"], game_archive)
+        self.download_asset(game_asset, game_archive)
         self.set_progress(0, "Загружаем отдельный запускатель " + game + "...")
-        self.download(runtime_asset["browser_download_url"], runtime_archive)
+        self.download_asset(runtime_asset, runtime_archive)
 
         staging_root = ROOT / "staging" / (game + "-install")
         if staging_root.exists():
@@ -1097,7 +1330,7 @@ class PrimeHub:
             if moved_old and backup.exists() and not dest.exists():
                 backup.rename(dest)
             raise
-        if backup.exists():
+        if backup.exists() and not self.get_launcher_settings().get("keep_backups", True):
             shutil.rmtree(backup, ignore_errors=True)
         self.state[game] = {
             "version": rel.get("tag_name"), "game_version": game_version,
@@ -1122,7 +1355,7 @@ class PrimeHub:
         staging.mkdir(parents=True, exist_ok=True)
         exe = staging / "SkyRealmApocalypse.exe"
         self.set_status("Скачиваем мобильную Apocalypse для Windows...")
-        self.download(asset["browser_download_url"], exe)
+        self.download_asset(asset, exe)
         if not exe.is_file() or exe.stat().st_size < 1_000_000:
             raise RuntimeError("SkyRealmApocalypse.exe скачался не полностью.")
         with exe.open("rb") as stream:
@@ -1155,7 +1388,7 @@ class PrimeHub:
             if moved_old and backup.exists() and not dest.exists():
                 backup.rename(dest)
             raise
-        if backup.exists():
+        if backup.exists() and not self.get_launcher_settings().get("keep_backups", True):
             shutil.rmtree(backup, ignore_errors=True)
         self.state["Apocalypse"] = {
             "version": tag, "game_version": "mobile-apocalypse",
@@ -1182,7 +1415,7 @@ class PrimeHub:
                 dest.mkdir(parents=True,exist_ok=True)
                 target=dest/"PrimeLauncher.exe"
                 self.set_status("Устанавливаем PrimeLauncher...")
-                self.download(asset["browser_download_url"],target)
+                self.download_asset(asset, target)
                 with target.open("rb") as stream:
                     if stream.read(2) != b"MZ" or target.stat().st_size < 1_000_000:
                         target.unlink(missing_ok=True)
@@ -1193,18 +1426,21 @@ class PrimeHub:
                 self.set_progress(100,"PrimeLauncher установлен.")
             else:
                 rel=self.releases.get("mobile") or self.fetch_json(API_PRIME_MOBILE)
-                asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
+                asset=self.find_asset(rel,"app-debug.apk") or self.find_asset(rel,"PrimeHub-Mobile.apk") or self.find_asset(rel,"PrimeLauncher-Mobile.apk")
                 if not asset: raise RuntimeError("В последнем мобильном релизе не найден APK")
                 dest=self.installed_dir("PrimeLauncher Mobile")
                 dest.mkdir(parents=True,exist_ok=True)
                 target=dest/"SkyRealm-Hub.apk"
                 self.set_status("Скачиваем Android APK...")
-                self.download(asset["browser_download_url"],target)
+                self.download_asset(asset, target)
                 self.state["PrimeLauncher Mobile"]={"version":rel.get("tag_name"),"installed":int(time.time())}
                 self.save_state()
                 self.set_status("APK скачан",COLORS["green"])
                 self.set_progress(100,"SkyRealm Hub APK сохранён в "+str(target)+" — открой его на Android для установки.")
-            self.root.after(0,self.refresh_cards)
+            if self.get_launcher_settings().get("clear_cache_after_install", False):
+                shutil.rmtree(ROOT / "cache", ignore_errors=True)
+            self.root.after(0, self.refresh_cards)
+            self.root.after(0, self._refresh_channels_if_open)
         except Exception as e:
             self.set_status("Не удалось завершить установку",COLORS["orange"])
             self.set_progress(0,"Ошибка загрузки: " + str(e))

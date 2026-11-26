@@ -6,7 +6,13 @@ PrimeHub is a Windows desktop game hub for installing, updating, and launching t
 - Dark desktop interface with PC and Android catalog tabs.
 - Installs SkyRealm and PrimeLauncher for Windows from the official SkyRealm-PC-Launcher release.
 - Downloads the PrimeLauncher Mobile APK from its official mobile release.
-- Checks installed games for newer versions.
+- Checks installed games for newer versions through the official GitHub Releases API.
+- Separate status and error details for SkyRealm PC, Apocalypse PC, Android APK and PrimeHub update channels.
+- Configurable retry count and network timeout for temporary GitHub failures and rate limits.
+- Optional previous-version backups, with one-click Apocalypse rollback.
+- Download integrity checks against published asset sizes and SHA-256 digests when available.
+- Scrollable launcher settings for per-channel checks, bandwidth limits, backup retention and cache cleanup.
+- Persistent window size, atomic settings saves and local update diagnostics in `%LOCALAPPDATA%\\PrimeHub\\update-check.log`.
 - Keeps installed games under `%LOCALAPPDATA%\PrimeHub\Games`.
 - Checks for PrimeHub updates from this repository's own latest GitHub Release. The release must include an asset named `PrimeHub.exe`.
 - Open registration and login using the SkyRealm Auth API, with email verification.
