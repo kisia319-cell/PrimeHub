@@ -45,6 +45,22 @@ jobs:
               "showSurvivalHud",
               "apocalypse-pc-v1.5.5",
               "check_updates_on_start",
+              "check_skyrealm_channel",
+              "check_apocalypse_channel",
+              "check_android_channel",
+              "check_primehub_channel",
+              "network_retries",
+              "network_timeout_seconds",
+              "keep_backups",
+              "clear_cache_after_install",
+              "remember_window_size",
+              "def _read_response(self, request, timeout=None):",
+              "def _record_channel_status(self, key, ok, message, version=\"\"):",
+              "def _render_channels(self):",
+              "def restore_apocalypse_backup(self):",
+              "def download_asset(self, asset, target):",
+              "X-RateLimit-Remaining",
+              "API_SKY = \"https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest\"",
               "confirm_updates",
               "close_hub_after_launch",
               "SKYREALM_APOCALYPSE_SETTINGS_JSON",
@@ -54,5 +70,15 @@ jobs:
           missing = [item for item in required if item not in source]
           if missing:
               raise SystemExit("Missing PrimeHub integration: " + ", ".join(missing))
-          print("PrimeHub account and Apocalypse integration checks passed.")
+          import ast, re
+          tree = ast.parse(source)
+          version_fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_version_key")
+          namespace = {"re": re}
+          exec(compile(ast.Module(body=[version_fn], type_ignores=[]), "version-check", "exec"), namespace)
+          version_key = namespace["_version_key"]
+          if not version_key("v1.2.10") > version_key("v1.2.9"):
+              raise SystemExit("PrimeHub version ordering regression")
+          if 'pack(before=' in source:
+              raise SystemExit("Unsafe Tkinter pack(before=...) layout call found")
+          print("PrimeHub account, update channels, diagnostics, rollback and version-order checks passed.")
           PY
