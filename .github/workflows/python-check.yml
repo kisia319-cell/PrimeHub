@@ -78,7 +78,7 @@ jobs:
           version_key = namespace["_version_key"]
           if not version_key("v1.2.10") > version_key("v1.2.9"):
               raise SystemExit("PrimeHub version ordering regression")
-          if 'pack(before=' in source:
+          if any('pack(before=' in line and not line.lstrip().startswith('#') for line in source.splitlines()):
               raise SystemExit("Unsafe Tkinter pack(before=...) layout call found")
           print("PrimeHub account, update channels, diagnostics, rollback and version-order checks passed.")
           PY
