@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.3.0"
+APP_VERSION = "v1.3.1"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -152,7 +152,24 @@ class PrimeHub:
 
         self.home_view = tk.Frame(self.content, bg=COLORS["bg"])
         self.home_view.pack(fill="both", expand=True)
-        header = tk.Frame(self.home_view, bg=COLORS["bg"])
+        # The library page has its own scrollable viewport so cards and the
+        # lower controls remain reachable on short displays and at high DPI.
+        home_scroll_wrap = tk.Frame(self.home_body, bg=COLORS["bg"])
+        home_scroll_wrap.pack(fill="both", expand=True)
+        self.home_canvas = tk.Canvas(home_scroll_wrap, bg=COLORS["bg"], highlightthickness=0, bd=0)
+        self.home_scrollbar = ttk.Scrollbar(home_scroll_wrap, orient="vertical", command=self.home_canvas.yview)
+        self.home_canvas.configure(yscrollcommand=self.home_scrollbar.set)
+        self.home_scrollbar.pack(side="right", fill="y")
+        self.home_canvas.pack(side="left", fill="both", expand=True)
+        self.home_body = tk.Frame(self.home_canvas, bg=COLORS["bg"])
+        self.home_window = self.home_canvas.create_window((0, 0), window=self.home_body, anchor="nw")
+        self.home_body.bind("<Configure>", lambda _e: self.home_canvas.configure(scrollregion=self.home_canvas.bbox("all")))
+        self.home_canvas.bind("<Configure>", lambda e: self.home_canvas.itemconfigure(self.home_window, width=e.width))
+        self.home_canvas.bind("<Enter>", self._bind_home_wheel)
+        self.home_canvas.bind("<Leave>", self._unbind_home_wheel)
+        self.home_body.bind("<Enter>", self._bind_home_wheel)
+        self.home_body.bind("<Leave>", self._unbind_home_wheel)
+        header = tk.Frame(self.home_body, bg=COLORS["bg"])
         header.pack(fill="x", padx=28, pady=(22, 12))
         brand_header = tk.Frame(header, bg=COLORS["bg"])
         brand_header.pack(side="left")
@@ -166,7 +183,7 @@ class PrimeHub:
         self.account_btn = tk.Button(header, text="Войти / Регистрация", command=self.open_account, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=13, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.account_btn.pack(side="right", padx=(0, 10))
 
-        hero = tk.Frame(self.home_view, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+        hero = tk.Frame(self.home_body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
         hero.pack(fill="x", padx=28, pady=(6, 17))
         hero_inner = tk.Frame(hero, bg=COLORS["panel"])
         hero_inner.pack(fill="x", padx=22, pady=17)
@@ -181,7 +198,7 @@ class PrimeHub:
         # Keep a permanent packed slot between the hero and library. The banner
         # itself can be hidden/shown inside this slot without pack(before=...),
         # which raises TclError when its sibling is temporarily unmanaged.
-        self.update_banner_slot = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.update_banner_slot = tk.Frame(self.home_body, bg=COLORS["bg"])
         self.update_banner_slot.pack(fill="x", padx=28, pady=(0, 10))
         self.update_banner = tk.Frame(self.update_banner_slot, bg="#183b35", highlightbackground=COLORS["green"], highlightthickness=1)
         self.update_banner_label = tk.Label(self.update_banner, text="", font=("Segoe UI", 10, "bold"), fg="#d9fff0", bg="#183b35", justify="left")
@@ -189,15 +206,15 @@ class PrimeHub:
         self.update_banner_button = tk.Button(self.update_banner, text="ОБНОВИТЬ APOCALYPSE", command=lambda:self.install_game("Apocalypse"), bg=COLORS["green"], fg="#071b16", activebackground="#8af0c0", bd=0, padx=18, pady=11, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.update_banner_button.pack(side="right", padx=12, pady=8)
         self.update_banner.pack_forget()
-        self.library_section = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.library_section = tk.Frame(self.home_body, bg=COLORS["bg"])
         self.library_section.pack(fill="x", padx=28, pady=(0, 9))
         section = self.library_section
         tk.Label(section, text="БИБЛИОТЕКА", font=("Segoe UI", 10, "bold"), fg=COLORS["muted"], bg=COLORS["bg"]).pack(side="left")
         self.count_label = tk.Label(section, text="", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"])
         self.count_label.pack(side="right")
-        self.cards = tk.Frame(self.home_view, bg=COLORS["bg"])
-        self.cards.pack(fill="both", expand=True, padx=28, pady=(0, 8))
-        bottom = tk.Frame(self.home_view, bg=COLORS["bg"])
+        self.cards = tk.Frame(self.home_body, bg=COLORS["bg"])
+        self.cards.pack(fill="x", padx=28, pady=(0, 8))
+        bottom = tk.Frame(self.home_body, bg=COLORS["bg"])
         bottom.pack(fill="x", padx=28, pady=(0, 16))
         self.progress = ttk.Progressbar(bottom, style="Hub.Horizontal.TProgressbar", mode="determinate", maximum=100)
         self.progress.pack(fill="x")
@@ -206,6 +223,51 @@ class PrimeHub:
         self.settings_view = None
         last_platform = self.state.get("last_platform", "PC") if self.get_launcher_settings().get("remember_platform", True) else "PC"
         self.set_platform(last_platform if last_platform in ("PC", "Android") else "PC")
+
+    def _bind_home_wheel(self, _event=None):
+        """Route mouse-wheel input to the home library only while hovered."""
+        try:
+            self.root.bind_all("<MouseWheel>", self._on_home_mousewheel)
+            self.root.bind_all("<Button-4>", self._on_home_mousewheel)
+            self.root.bind_all("<Button-5>", self._on_home_mousewheel)
+        except tk.TclError:
+            pass
+
+    def _unbind_home_wheel(self, _event=None):
+        """Stop intercepting wheel input after the pointer leaves the library."""
+        try:
+            self.root.unbind_all("<MouseWheel>")
+            self.root.unbind_all("<Button-4>")
+            self.root.unbind_all("<Button-5>")
+        except tk.TclError:
+            pass
+
+    def _on_home_mousewheel(self, event):
+        try:
+            if not self.home_view.winfo_ismapped():
+                return
+            widget = event.widget
+            inside_home = False
+            while widget is not None:
+                if widget is self.home_body or widget is self.home_canvas:
+                    inside_home = True
+                    break
+                parent = widget.winfo_parent()
+                widget = widget.nametowidget(parent) if parent else None
+            if not inside_home:
+                return
+            if getattr(event, "num", None) == 4:
+                delta = -3
+            elif getattr(event, "num", None) == 5:
+                delta = 3
+            else:
+                delta = -1 * int(event.delta / 120) if event.delta else 0
+                if delta == 0 and event.delta:
+                    delta = -1 if event.delta > 0 else 1
+            if delta:
+                self.home_canvas.yview_scroll(delta, "units")
+        except (tk.TclError, AttributeError, KeyError):
+            pass
 
     def get_launcher_settings(self):
         defaults = {
