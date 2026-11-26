@@ -11,10 +11,10 @@ GAMES = ROOT / "Games"
 DATA = ROOT / "hub-state.json"
 AUTH_SESSION = ROOT / "auth-session.bin"
 APOCALYPSE_CONFIG = ROOT / "apocalypse-settings.json"
-API_SKY = "https://github.com/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
+API_SKY = "https://api.github.com/repos/kisia319-cell/SkyRealm-PC-Launcher/releases/latest"
 API_APOCALYPSE_PC = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases?per_page=100"
 API_PRIME_MOBILE = "https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/latest"
-API_HUB = "https://github.com/kisia319-cell/PrimeHub/releases/latest"
+API_HUB = "https://api.github.com/repos/kisia319-cell/PrimeHub/releases/latest"
 API_AUTH = "https://jaaguprbfrzrcwuusher.supabase.co/functions/v1/skyrealm-auth"
 API_KEY = "sb_publishable_MKaNYqw3r0BLa1GTDVvjfw_yU3Wd6QL"
 HEADERS = {"User-Agent": "PrimeHub/1.0", "Accept": "application/vnd.github+json"}
@@ -65,10 +65,14 @@ class PrimeHub:
         self.root.geometry("1120x740")
         self.root.minsize(900, 620)
         self.root.configure(bg=COLORS["bg"])
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.platform = "PC"
         self.releases = {}
         self.busy = False
         self.state = self.load_state()
+        self.root.geometry(self.get_launcher_settings().get("window_geometry", "1120x740"))
+        self.channel_status = self.state.get("channel_status", {}) if isinstance(self.state.get("channel_status", {}), dict) else {}
+        self.channels_view = None
         self.session = None  # Only the rotating refresh token is persisted, encrypted with Windows DPAPI.
         self.pending_email = ""
         self.account_window = None
@@ -80,14 +84,41 @@ class PrimeHub:
         else:
             self.set_status('Автоматическая проверка отключена настройками', COLORS['muted'])
 
-    def load_state(self):
-        try: return json.loads(DATA.read_text("utf-8"))
-        except: return {}
+    def on_close(self):
+        try:
+            settings = self.get_launcher_settings()
+            if settings.get("remember_window_size", True):
+                settings["window_geometry"] = self.root.geometry()
+                self.state["primehub_settings"] = settings
+                self.save_state()
+        except (tk.TclError, OSError, ValueError):
+            pass
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
 
+    def load_state(self):
+        try:
+            value = json.loads(DATA.read_text("utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError):
+            if DATA.exists():
+                try:
+                    damaged = DATA.with_name("hub-state.corrupt-" + time.strftime("%Y%m%d-%H%M%S") + ".json")
+                    DATA.replace(damaged)
+                except OSError:
+                    pass
+            return {}
     def save_state(self):
         ROOT.mkdir(parents=True, exist_ok=True)
-        DATA.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), "utf-8")
-
+        temp = DATA.with_suffix(".tmp")
+        payload = json.dumps(self.state, ensure_ascii=False, indent=2)
+        with temp.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, DATA)
     def build_ui(self):
         style = ttk.Style()
         style.theme_use("clam")
@@ -111,6 +142,8 @@ class PrimeHub:
         self.nav_home.pack(fill="x", padx=10, pady=4)
         self.nav_settings = tk.Button(self.sidebar, text="⚙   Настройки", command=self.show_settings, anchor="w", bg=COLORS["panel"], fg=COLORS["muted"], activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=13, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.nav_settings.pack(fill="x", padx=10, pady=4)
+        self.nav_channels = tk.Button(self.sidebar, text="◉   Каналы и диагностика", command=self.show_channels, anchor="w", bg=COLORS["panel"], fg=COLORS["muted"], activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=12, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.nav_channels.pack(fill="x", padx=10, pady=3)
         tk.Label(self.sidebar, text="ПРОФИЛЬ ИГР", font=("Segoe UI", 8, "bold"), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=18, pady=(22, 7))
         self.nav_apocalypse = tk.Button(self.sidebar, text="☣   Apocalypse", command=self.show_apocalypse_settings, anchor="w", bg=COLORS["panel"], fg="#e89a9d", activebackground=COLORS["panel2"], activeforeground=COLORS["text"], bd=0, padx=17, pady=11, font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.nav_apocalypse.pack(fill="x", padx=10, pady=2)
@@ -176,18 +209,41 @@ class PrimeHub:
 
     def get_launcher_settings(self):
         defaults = {
-            "check_updates_on_start": True,
-            "confirm_updates": True,
-            "close_hub_after_launch": False,
-            "remember_platform": True,
-            "download_unlimited": True,
-            "download_limit_mbps": 2.0,
+            "check_updates_on_start": True, "confirm_updates": True,
+            "close_hub_after_launch": False, "remember_platform": True,
+            "download_unlimited": True, "download_limit_mbps": 2.0,
+            "check_skyrealm_channel": True, "check_apocalypse_channel": True,
+            "check_android_channel": True, "check_primehub_channel": True,
+            "network_retries": 2, "network_timeout_seconds": 35,
+            "keep_backups": True, "clear_cache_after_install": False,
+            "remember_window_size": True, "window_geometry": "1120x740",
         }
         stored = self.state.get("primehub_settings", {})
         if not isinstance(stored, dict):
             stored = {}
-        return {**defaults, **stored}
-
+        result = {**defaults, **stored}
+        for key in (
+            "check_updates_on_start", "confirm_updates", "close_hub_after_launch",
+            "remember_platform", "download_unlimited", "check_skyrealm_channel",
+            "check_apocalypse_channel", "check_android_channel", "check_primehub_channel",
+            "keep_backups", "clear_cache_after_install", "remember_window_size",
+        ):
+            result[key] = bool(result.get(key, defaults[key]))
+        try:
+            result["download_limit_mbps"] = max(0.05, min(1000.0, float(result["download_limit_mbps"])))
+        except (TypeError, ValueError):
+            result["download_limit_mbps"] = defaults["download_limit_mbps"]
+        try:
+            result["network_retries"] = max(0, min(4, int(result["network_retries"])))
+        except (TypeError, ValueError):
+            result["network_retries"] = defaults["network_retries"]
+        try:
+            result["network_timeout_seconds"] = max(10, min(120, int(result["network_timeout_seconds"])))
+        except (TypeError, ValueError):
+            result["network_timeout_seconds"] = defaults["network_timeout_seconds"]
+        geometry = str(result.get("window_geometry") or defaults["window_geometry"])
+        result["window_geometry"] = geometry if re.fullmatch(r"\d{3,4}x\d{3,4}(?:[+-]\d+){0,2}", geometry) else defaults["window_geometry"]
+        return result
     def get_apocalypse_settings(self):
         defaults = {
             "effects": "high", "joy": 100, "motion": True, "hints": True,
@@ -235,22 +291,28 @@ class PrimeHub:
     def _nav_style(self, active):
         self.nav_home.configure(bg=COLORS["blue"] if active == "home" else COLORS["panel"], fg="white" if active == "home" else COLORS["muted"])
         self.nav_settings.configure(bg=COLORS["blue"] if active == "settings" else COLORS["panel"], fg="white" if active == "settings" else COLORS["muted"])
+        self.nav_channels.configure(bg=COLORS["blue"] if active == "channels" else COLORS["panel"], fg="white" if active == "channels" else COLORS["muted"])
         self.nav_apocalypse.configure(bg=COLORS["panel2"] if active == "apocalypse" else COLORS["panel"], fg="#ffd6d7" if active == "apocalypse" else "#e89a9d")
-
     def show_home(self):
         if self.settings_view and self.settings_view.winfo_exists():
             self.settings_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.pack_forget()
         self.home_view.pack(fill="both", expand=True)
         self._nav_style("home")
-
     def show_settings(self):
         self._render_settings("settings")
 
     def show_apocalypse_settings(self):
         self._render_settings("apocalypse")
 
+    def show_channels(self):
+        self._render_channels()
+
     def _render_settings(self, active_tab="settings"):
         self.home_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.pack_forget()
         if self.settings_view and self.settings_view.winfo_exists():
             self.settings_view.destroy()
         self.settings_view = tk.Frame(self.content, bg=COLORS["bg"])
@@ -268,7 +330,13 @@ class PrimeHub:
         scroll = ttk.Scrollbar(canvas_wrap, orient="vertical", command=canvas.yview)
         body = tk.Frame(canvas, bg=COLORS["bg"])
         body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=body, anchor="nw")
+        body_window = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_window, width=event.width))
+        def _wheel_settings(event):
+            if getattr(event, "delta", 0):
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _wheel_settings))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
@@ -277,10 +345,17 @@ class PrimeHub:
         if active_tab == "settings":
             values = self.get_launcher_settings()
             rows = [
-                ("check_updates_on_start", "Проверять обновления при запуске", "Проверять каталог PrimeHub после открытия лаунчера.", "bool"),
-                ("confirm_updates", "Подтверждать обновление игры", "Перед заменой уже установленной версии показывать запрос.", "bool"),
-                ("close_hub_after_launch", "Закрывать PrimeHub после запуска игры", "Лаунчер останется закрытым, а игра продолжит работать.", "bool"),
-                ("remember_platform", "Запоминать выбранную платформу", "Открывать PC или Android так, как было выбрано в прошлый раз.", "bool"),
+                ("check_updates_on_start", "Проверять обновления при запуске", "Автоматически проверять включённые каналы при старте.", "bool"),
+                ("confirm_updates", "Подтверждать обновление игры", "Спрашивать перед заменой установленной версии.", "bool"),
+                ("close_hub_after_launch", "Закрывать PrimeHub после запуска", "Закрывать окно лаунчера после старта игры.", "bool"),
+                ("remember_platform", "Запоминать платформу", "Открывать PC или Android как в прошлый раз.", "bool"),
+                ("remember_window_size", "Запоминать размер окна", "Сохранять размер и положение окна.", "bool"),
+                ("keep_backups", "Хранить резервную копию игры", "Оставлять предыдущую версию после обновления для отката.", "bool"),
+                ("clear_cache_after_install", "Очищать кэш после установки", "Удалять временные архивы после успешной установки.", "bool"),
+                ("check_skyrealm_channel", "Проверять канал SkyRealm PC", "Официальный релиз игры и отдельного запускателя.", "bool"),
+                ("check_apocalypse_channel", "Проверять канал Apocalypse PC", "Самостоятельный Windows-релиз Apocalypse.", "bool"),
+                ("check_android_channel", "Проверять канал Android APK", "Мобильный APK в выбранной вкладке Android.", "bool"),
+                ("check_primehub_channel", "Проверять обновления PrimeHub", "Отдельный канал самого лаунчера.", "bool"),
             ]
             tk.Label(body, text="ОБЩИЕ ПАРАМЕТРЫ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(4, 8))
             for key, label, description, kind in rows:
@@ -312,6 +387,21 @@ class PrimeHub:
             speed_entry = tk.Entry(speed_controls, textvariable=speed_var, width=10, bg=COLORS["panel2"], fg=COLORS["text"], insertbackground=COLORS["text"], relief="flat", font=("Segoe UI", 10))
             speed_entry.pack(anchor="e", pady=(4, 0), ipady=5)
             tk.Label(speed_controls, text="Примеры: 0.5 • 1 • 2 • 5 • 10", font=("Segoe UI", 7), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="e", pady=(4, 0))
+            tk.Label(body, text="СЕТЬ И ПОВТОРНЫЕ ПОПЫТКИ", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["bg"]).pack(anchor="w", pady=(18, 8))
+            for key, label, description, options in [
+                ("network_retries", "Повторять неудачные запросы", "Повтор при тайм-ауте, ограничении GitHub 429 и временных ошибках сервера.", ["0", "1", "2", "3", "4"]),
+                ("network_timeout_seconds", "Тайм-аут сети", "Время ожидания ответа GitHub перед повтором.", ["10", "20", "35", "60", "90", "120"]),
+            ]:
+                card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+                card.pack(fill="x", pady=5)
+                copy = tk.Frame(card, bg=COLORS["panel"])
+                copy.pack(side="left", fill="x", expand=True, padx=15, pady=11)
+                tk.Label(copy, text=label, font=("Segoe UI", 10, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w")
+                tk.Label(copy, text=description, font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"], wraplength=500, justify="left").pack(anchor="w", pady=(3, 0))
+                variable = tk.StringVar(value=str(values.get(key, 2 if key == "network_retries" else 35)))
+                variables[key] = variable
+                ttk.Combobox(card, values=options, state="readonly", width=10, textvariable=variable).pack(side="right", padx=16, pady=12)
+            tk.Label(body, text="Подробные версии, время последней проверки и полный текст ошибки каждого источника доступны в разделе «Каналы и диагностика».", wraplength=760, justify="left", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["bg"]).pack(anchor="w", pady=(12, 0))
         else:
             values = self.get_apocalypse_settings()
             self._settings_form_values = {}
@@ -368,14 +458,19 @@ class PrimeHub:
             try:
                 if active_tab == "settings":
                     settings = self.get_launcher_settings()
-                    settings.update({k: bool(v.get()) for k, v in variables.items() if k == "check_updates_on_start" or k == "confirm_updates" or k == "close_hub_after_launch" or k == "remember_platform" or k == "download_unlimited"})
+                    boolean_keys = ("check_updates_on_start", "confirm_updates", "close_hub_after_launch", "remember_platform", "download_unlimited", "remember_window_size", "keep_backups", "clear_cache_after_install", "check_skyrealm_channel", "check_apocalypse_channel", "check_android_channel", "check_primehub_channel")
+                    settings.update({k: bool(variables[k].get()) for k in boolean_keys if k in variables})
                     try:
                         limit = float(variables["download_limit_mbps"].get().replace(",", "."))
+                        retries = int(variables["network_retries"].get())
+                        timeout = int(variables["network_timeout_seconds"].get())
                     except (ValueError, AttributeError):
-                        raise ValueError("Укажи скорость числом, например 2 или 0.5 МБ/с.")
+                        raise ValueError("Проверь скорость загрузки, число повторов и тайм-аут.")
                     if not 0.05 <= limit <= 1000:
                         raise ValueError("Допустимый лимит: от 0.05 до 1000 МБ/с.")
-                    settings["download_limit_mbps"] = limit
+                    if retries not in range(5) or timeout not in (10, 20, 35, 60, 90, 120):
+                        raise ValueError("Выбери допустимое значение повторов и тайм-аута.")
+                    settings.update({"download_limit_mbps": limit, "network_retries": retries, "network_timeout_seconds": timeout})
                     self.state["primehub_settings"] = settings
                     self.save_state()
                 else:
@@ -405,6 +500,11 @@ class PrimeHub:
                     "check_updates_on_start": True, "confirm_updates": True,
                     "close_hub_after_launch": False, "remember_platform": True,
                     "download_unlimited": True, "download_limit_mbps": 2.0,
+                    "check_skyrealm_channel": True, "check_apocalypse_channel": True,
+                    "check_android_channel": True, "check_primehub_channel": True,
+                    "network_retries": 2, "network_timeout_seconds": 35,
+                    "keep_backups": True, "clear_cache_after_install": False,
+                    "remember_window_size": True, "window_geometry": "1120x740",
                 }
             else:
                 self.state["apocalypse_settings"] = {
@@ -423,6 +523,129 @@ class PrimeHub:
         save_btn.pack(side="right", padx=(8, 0))
         reset_btn = tk.Button(actions, text="СБРОСИТЬ", command=reset_page, bg=COLORS["panel2"], fg=COLORS["text"], activebackground=COLORS["line"], activeforeground=COLORS["text"], bd=0, padx=15, pady=10, font=("Segoe UI", 9, "bold"), cursor="hand2")
         reset_btn.pack(side="right")
+
+    def _record_channel_status(self, key, ok, message, version=""):
+        self.channel_status[key] = {"ok": bool(ok), "message": str(message)[:1200], "version": str(version or ""), "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self.state["channel_status"] = self.channel_status
+
+    def _refresh_channels_if_open(self):
+        try:
+            if self.channels_view and self.channels_view.winfo_exists():
+                self._render_channels()
+        except tk.TclError:
+            pass
+
+    def _render_channels(self):
+        self.home_view.pack_forget()
+        if self.settings_view and self.settings_view.winfo_exists():
+            self.settings_view.pack_forget()
+        if self.channels_view and self.channels_view.winfo_exists():
+            self.channels_view.destroy()
+        self.channels_view = tk.Frame(self.content, bg=COLORS["bg"])
+        self.channels_view.pack(fill="both", expand=True)
+        self._nav_style("channels")
+        tk.Label(self.channels_view, text="КАНАЛЫ И ДИАГНОСТИКА", font=("Segoe UI", 20, "bold"), fg=COLORS["text"], bg=COLORS["bg"]).pack(anchor="w", padx=28, pady=(24, 4))
+        tk.Label(self.channels_view, text="Отдельное состояние каждого источника, версия, время последней проверки и полный текст ошибки.", font=("Segoe UI", 9), fg=COLORS["muted"], bg=COLORS["bg"], wraplength=800, justify="left").pack(anchor="w", padx=28, pady=(0, 15))
+        wrap = tk.Frame(self.channels_view, bg=COLORS["bg"])
+        wrap.pack(fill="both", expand=True, padx=24, pady=(0, 8))
+        canvas = tk.Canvas(wrap, bg=COLORS["bg"], highlightthickness=0)
+        bar = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, bg=COLORS["bg"])
+        body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        bar.pack(side="right", fill="y")
+        settings = self.get_launcher_settings()
+        channels = [("skyrealm","SkyRealm PC","check_skyrealm_channel"),("apocalypse_pc","Apocalypse PC","check_apocalypse_channel"),("android","Android APK","check_android_channel"),("primehub","PrimeHub","check_primehub_channel")]
+        for index, (key, title, setting_key) in enumerate(channels):
+            item = self.channel_status.get(key, {})
+            enabled = settings.get(setting_key, True)
+            ok = item.get("ok")
+            label = "ОТКЛЮЧЁН" if not enabled else ("ДОСТУПЕН" if ok else ("ОШИБКА" if item.get("checked_at") else "НЕ ПРОВЕРЯЛСЯ"))
+            color = COLORS["muted"] if not enabled or not item.get("checked_at") else (COLORS["green"] if ok else COLORS["orange"])
+            card = tk.Frame(body, bg=COLORS["panel"], highlightbackground=COLORS["line"], highlightthickness=1)
+            card.grid(row=index//2, column=index%2, sticky="nsew", padx=6, pady=6)
+            body.grid_columnconfigure(index%2, weight=1)
+            tk.Label(card, text=title, font=("Segoe UI", 12, "bold"), fg=COLORS["text"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(13, 4))
+            tk.Label(card, text="● " + label, font=("Segoe UI", 8, "bold"), fg=color, bg=COLORS["panel"]).pack(anchor="w", padx=15)
+            tk.Label(card, text=item.get("version") or "Версия пока не получена", font=("Segoe UI", 9, "bold"), fg=COLORS["cyan"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(5, 0))
+            tk.Label(card, text=item.get("message") or "Нажми «Проверить каналы».", font=("Segoe UI", 8), fg=COLORS["muted"], bg=COLORS["panel"], wraplength=350, justify="left").pack(anchor="w", padx=15, pady=(4, 3))
+            tk.Label(card, text="Последняя проверка: " + (item.get("checked_at") or "—"), font=("Segoe UI", 7), fg=COLORS["muted"], bg=COLORS["panel"]).pack(anchor="w", padx=15, pady=(2, 13))
+        actions = tk.Frame(self.channels_view, bg=COLORS["bg"])
+        actions.pack(fill="x", padx=28, pady=(4, 16))
+        for label, command, color in [("ПРОВЕРИТЬ КАНАЛЫ",self.check_updates_async,COLORS["blue"]),("ЖУРНАЛ",self.open_update_log,COLORS["panel2"]),("ПАПКА ИГР",self.open_games_folder,COLORS["panel2"]),("ОЧИСТИТЬ КЭШ",self.clear_download_cache,COLORS["panel2"]),("ОТКАТ APOCALYPSE",self.restore_apocalypse_backup,"#68404a")]:
+            tk.Button(actions, text=label, command=command, bg=color, fg="white", activebackground=COLORS["cyan"], activeforeground="#07101d", bd=0, padx=10, pady=9, font=("Segoe UI", 8, "bold"), cursor="hand2").pack(side="left", padx=(0, 6))
+
+    def open_update_log(self):
+        path = ROOT / "update-check.log"
+        if not path.is_file():
+            messagebox.showinfo("PrimeHub", "Журнал ещё пуст. Сначала проверь каналы.", parent=self.root)
+            return
+        try:
+            os.startfile(str(path))
+        except Exception as exc:
+            messagebox.showerror("PrimeHub", "Не удалось открыть журнал: " + str(exc), parent=self.root)
+
+    def open_games_folder(self):
+        GAMES.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(GAMES))
+        except Exception as exc:
+            messagebox.showerror("PrimeHub", "Не удалось открыть папку игр: " + str(exc), parent=self.root)
+
+    def clear_download_cache(self):
+        if self.busy:
+            messagebox.showinfo("PrimeHub", "Дождись завершения текущей загрузки.", parent=self.root)
+            return
+        cache = ROOT / "cache"
+        if not cache.exists():
+            messagebox.showinfo("PrimeHub", "Кэш уже пуст.", parent=self.root)
+            return
+        if not messagebox.askyesno("Очистка кэша", "Удалить только временные архивы? Игры, миры, настройки и резервные копии не затрагиваются.", parent=self.root):
+            return
+        try:
+            shutil.rmtree(cache)
+            messagebox.showinfo("PrimeHub", "Временный кэш очищен.", parent=self.root)
+        except OSError as exc:
+            messagebox.showerror("PrimeHub", "Не удалось очистить кэш: " + str(exc), parent=self.root)
+
+    def restore_apocalypse_backup(self):
+        if self.busy:
+            messagebox.showinfo("PrimeHub", "Дождись завершения текущей операции.", parent=self.root)
+            return
+        backup = ROOT / "backups" / "Apocalypse.previous"
+        dest = self.installed_dir("Apocalypse")
+        if not backup.is_dir() or not (backup / "SkyRealmApocalypse.exe").is_file():
+            messagebox.showinfo("Откат Apocalypse", "Резервная копия не найдена. Включи её хранение перед следующим обновлением.", parent=self.root)
+            return
+        if not messagebox.askyesno("Откат Apocalypse", "Вернуть предыдущую версию? Текущая версия станет резервной копией.", parent=self.root):
+            return
+        temp = ROOT / "staging" / "Apocalypse-current"
+        try:
+            temp.parent.mkdir(parents=True, exist_ok=True)
+            if temp.exists():
+                shutil.rmtree(temp)
+            if dest.exists():
+                dest.rename(temp)
+            try:
+                backup.rename(dest)
+            except Exception:
+                if temp.exists() and not dest.exists():
+                    temp.rename(dest)
+                raise
+            if temp.exists():
+                temp.rename(backup)
+            edition_path = dest / "edition.json"
+            edition = json.loads(edition_path.read_text(encoding="utf-8")) if edition_path.is_file() else {}
+            self.state["Apocalypse"] = {"version": edition.get("version", "backup"), "game_version": "mobile-apocalypse", "edition": "apocalypse-mobile", "installed": int(time.time())}
+            self.save_state()
+            self.set_status("Apocalypse восстановлена из резервной копии", COLORS["green"])
+            self.refresh_cards()
+            self._refresh_channels_if_open()
+        except Exception as exc:
+            messagebox.showerror("Откат Apocalypse", "Не удалось восстановить копию: " + str(exc), parent=self.root)
 
     def set_platform(self, platform):
         self.platform = platform
