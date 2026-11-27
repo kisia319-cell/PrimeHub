@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 APP_NAME = "PrimeHub"
-APP_VERSION = "v1.3.2"
+APP_VERSION = "v1.3.3"
 APOCALYPSE_PC_VERSION = "apocalypse-pc-v1.5.5"
 ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PrimeHub"
 GAMES = ROOT / "Games"
@@ -978,27 +978,35 @@ class PrimeHub:
         ]
         if matching:
             return max(matching, key=lambda item: _version_key(item.get("tag_name")))
+        # The Atom feed is limited to the newest 20 repository releases. Hub releases
+        # can push Apocalypse tags out of that window, so walk the public HTML
+        # releases pages when the API is rate-limited.
         tags, fallback_errors = set(), []
-        try:
-            req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases.atom", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3", "Accept": "application/atom+xml"})
-            raw, _ = self._read_response(req)
-            tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', html.unescape(raw.decode("utf-8", errors="replace")), re.I))
-        except Exception as exc:
-            fallback_errors.append("Atom: " + str(exc))
-        if not tags:
+        for page in range(1, 13):
             try:
-                req = urllib.request.Request("https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?q=apocalypse-pc", headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
+                page_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases?page=" + str(page)
+                req = urllib.request.Request(page_url, headers={"User-Agent": "Mozilla/5.0 PrimeHub/1.3"})
                 raw, _ = self._read_response(req)
-                page = html.unescape(raw.decode("utf-8", errors="replace"))
-                tags.update(re.findall(r'(?:https?://github\.com)?/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
-                tags.update(re.findall(r'SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)', page, re.I))
+                page_html = html.unescape(raw.decode("utf-8", errors="replace"))
+                found = re.findall(
+                    r'/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/(apocalypse-pc-v[0-9][A-Za-z0-9._-]*)',
+                    page_html, re.I
+                )
+                tags.update(found)
+                # GitHub serves ten releases per page. Continue across pages with
+                # no Apocalypse entry because unrelated Hub releases may intervene.
             except Exception as exc:
-                fallback_errors.append("Страница релизов: " + str(exc))
+                fallback_errors.append("Страница релизов " + str(page) + ": " + str(exc))
+                break
         for tag in sorted(tags, key=_version_key, reverse=True):
             try:
-                release = self.fetch_json("https://api.github.com/repos/kisia319-cell/SkyRealm-Hub-Mobile/releases/tags/" + urllib.parse.quote(tag, safe=""))
+                # Resolve the release page and expanded-assets HTML directly.
+                # This path does not consume the exhausted GitHub REST API quota.
+                release_url = "https://github.com/kisia319-cell/SkyRealm-Hub-Mobile/releases/tag/" + urllib.parse.quote(tag, safe="")
+                release = self.fetch_json(release_url)
                 if isinstance(release, dict) and self.find_asset(release, "SkyRealmApocalypse.exe"):
                     return release
+                fallback_errors.append(tag + ": отсутствует SkyRealmApocalypse.exe")
             except Exception as exc:
                 fallback_errors.append(tag + ": " + str(exc))
         detail = ("API: " + str(api_error) + ". ") if api_error else ""
